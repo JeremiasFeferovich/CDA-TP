@@ -176,6 +176,19 @@ zonaprop_scraper/data/raw/*.json
 zonaprop_scraper/data/processed/*.csv
 zonaprop_scraper/data/processed/*.json
 
+# All data directories
+data/
+*/data/
+**/data/raw/
+**/data/processed/
+**/data/logs/
+
+# Scraped datasets with timestamps
+*_20*.csv
+*_20*.json
+zonaprop_*.csv
+zonaprop_*.json
+
 # Screenshots and debugging files
 screenshots/
 *.png
@@ -217,3 +230,31 @@ secrets.json
 # Backup files
 *.bak
 *.backup
+
+# SeleniumBase specific files
+downloaded_files/
+*.lock
+.wdm/
+uc_*
+
+# Scraper specific temporary files
+scraper_*.log
+scraper_full_*.log
+*_scraper_*.log
+
+# Virtual environment (additional patterns)
+venv/
+.venv/
+env/
+.env/
+
+# Project specific files to ignore
+examples/
+SCRAPER_*.md
+*_RESUMEN.md
+*_REPORT.md
+*_SUCCESS*.md
+
+# Chrome/Browser related
+/tmp/uc_*
+user-data-dir/
