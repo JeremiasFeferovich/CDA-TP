@@ -124,11 +124,11 @@ class ZonaPropFullScraper:
             True si la navegación fue exitosa
         """
         try:
-            # Construir URL
+            # Construir URL para Capital Federal específicamente
             if page_number == 1:
-                url = "https://www.zonaprop.com.ar/departamentos-venta.html"
+                url = "https://www.zonaprop.com.ar/departamentos-venta-capital-federal.html"
             else:
-                url = f"https://www.zonaprop.com.ar/departamentos-venta-pagina-{page_number}.html"
+                url = f"https://www.zonaprop.com.ar/departamentos-venta-capital-federal-pagina-{page_number}.html"
             
             self.logger.info(f"🌐 Navegando con CDP Mode: {url}")
             
