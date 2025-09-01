@@ -196,7 +196,8 @@ class ZonaPropFullScraper:
                     price: ['.price', '[data-qa="price"]', '.posting-price', '.card-price', '.amount'],
                     location: ['.address', '[data-qa="address"]', '.posting-address', '.card-address', '.location'],
                     surface: ['.surface', '[data-qa="surface"]', '.posting-surface', '.card-surface', '.area'],
-                    rooms: ['.rooms', '[data-qa="rooms"]', '.posting-rooms', '.card-rooms', '.ambientes']
+                    rooms: ['.rooms', '[data-qa="rooms"]', '.posting-rooms', '.card-rooms', '.ambientes'],
+                    description: ['.description', '[data-qa="description"]', '.posting-description', '.card-description', '.property-description', '.listing-description', '.posting-title', '.card-title']
                 };
                 
                 Object.keys(selectors).forEach(function(field) {
@@ -249,6 +250,10 @@ class ZonaPropFullScraper:
                 # Extraer habitaciones
                 rooms = self._extract_rooms(js_prop.get('rooms', ''), full_text)
                 property_data['rooms'] = rooms
+                
+                # Extraer descripción
+                description = self._extract_description(js_prop.get('description', ''), full_text)
+                property_data['description'] = description
                 
                 # Extraer información adicional
                 property_data.update(self._extract_additional_info(full_text))
@@ -346,6 +351,55 @@ class ZonaPropFullScraper:
             match = re.search(pattern, full_text, re.IGNORECASE)
             if match:
                 return match.group(0).strip()
+        
+        return "N/A"
+    
+    def _extract_description(self, direct_description: str, full_text: str) -> str:
+        """Extrae descripción usando múltiples estrategias"""
+        if direct_description and direct_description.strip() and len(direct_description) > 10:
+            # Limpiar y truncar la descripción directa si es muy larga
+            cleaned_desc = direct_description.strip()
+            if len(cleaned_desc) > 500:
+                cleaned_desc = cleaned_desc[:500] + "..."
+            return cleaned_desc
+        
+        # Si no hay descripción directa, intentar extraer del texto completo
+        # Buscar patrones comunes de descripciones en listings
+        patterns = [
+            r'Departamento\s+[^.]{20,200}',     # Departamento + descripción
+            r'Excelente\s+[^.]{20,200}',       # Excelente + descripción
+            r'Hermoso\s+[^.]{20,200}',         # Hermoso + descripción
+            r'Amplio\s+[^.]{20,200}',          # Amplio + descripción
+            r'Moderno\s+[^.]{20,200}',         # Moderno + descripción
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                description = match.group(0).strip()
+                # Limpiar y validar longitud
+                if len(description) >= 20 and len(description) <= 500:
+                    return description
+                elif len(description) > 500:
+                    return description[:500] + "..."
+        
+        # Como último recurso, tomar las primeras palabras del texto completo
+        # que parezcan una descripción
+        words = full_text.split()
+        if len(words) > 10:
+            # Buscar el inicio de una posible descripción
+            description_start = -1
+            for i, word in enumerate(words):
+                if any(keyword in word.lower() for keyword in ['departamento', 'excelente', 'hermoso', 'amplio', 'moderno', 'luminoso']):
+                    description_start = i
+                    break
+            
+            if description_start >= 0 and description_start < len(words) - 5:
+                # Tomar hasta 30 palabras desde el inicio de la descripción
+                desc_words = words[description_start:description_start + 30]
+                description = ' '.join(desc_words)
+                if len(description) >= 20:
+                    return description
         
         return "N/A"
     
@@ -448,7 +502,7 @@ class ZonaPropFullScraper:
         print(f"Propiedades por página: {total // len(pages) if pages else 0} promedio")
         
         # Calidad de datos por campo
-        fields = ['price', 'location', 'surface', 'rooms']
+        fields = ['price', 'location', 'surface', 'rooms', 'description']
         print(f"\n📋 Calidad de datos:")
         
         for field in fields:
