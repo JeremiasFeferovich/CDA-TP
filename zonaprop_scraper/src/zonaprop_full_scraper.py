@@ -188,16 +188,22 @@ class ZonaPropFullScraper:
             postings.forEach(function(posting, index) {
                 var property = {
                     index: index + 1,
-                    full_text: posting.textContent.replace(/\\s+/g, ' ').trim()
+                    full_text: posting.textContent.replace(/\\s+/g, ' ').trim(),
+                    // Extract property metadata from attributes
+                    property_id: posting.getAttribute('data-id'),
+                    property_url: posting.getAttribute('data-to-posting')
                 };
                 
                 // Intentar extraer elementos específicos
                 var selectors = {
-                    price: ['.price', '[data-qa="price"]', '.posting-price', '.card-price', '.amount'],
+                    price: ['.postingPrices-module__price', '.price', '[data-qa="price"]', '.posting-price', '.card-price', '.amount'],
                     location: ['.address', '[data-qa="address"]', '.posting-address', '.card-address', '.location'],
                     surface: ['.surface', '[data-qa="surface"]', '.posting-surface', '.card-surface', '.area'],
                     rooms: ['.rooms', '[data-qa="rooms"]', '.posting-rooms', '.card-rooms', '.ambientes'],
-                    description: ['.description', '[data-qa="description"]', '.posting-description', '.card-description', '.property-description', '.listing-description', '.posting-title', '.card-title']
+                    description: ['.description', '[data-qa="description"]', '.posting-description', '.card-description', '.property-description', '.listing-description', '.posting-title', '.card-title'],
+                    // Enhanced location selectors
+                    full_address: ['.postingLocations-module__location-address', '.location-address', '.address-full'],
+                    neighborhood: ['.postingLocations-module__location-text', '.location-text', '.neighborhood']
                 };
                 
                 Object.keys(selectors).forEach(function(field) {
@@ -230,7 +236,10 @@ class ZonaPropFullScraper:
                     'page': page_number,
                     'position': i + 1,
                     'scraping_date': datetime.now().isoformat(),
-                    'extraction_method': 'cdp_javascript_regex'
+                    'extraction_method': 'cdp_javascript_regex',
+                    # Add new fields
+                    'property_id': js_prop.get('property_id', 'N/A'),
+                    'property_url': self._build_full_url(js_prop.get('property_url', ''))
                 }
                 
                 full_text = js_prop.get('full_text', '')
@@ -239,9 +248,20 @@ class ZonaPropFullScraper:
                 price = self._extract_price(js_prop.get('price', ''), full_text)
                 property_data['price'] = price
                 
+                # Extraer moneda
+                currency = self._extract_currency(js_prop.get('price', ''), full_text, price)
+                property_data['currency'] = currency
+                
                 # Extraer ubicación
                 location = self._extract_location(js_prop.get('location', ''), full_text)
                 property_data['location'] = location
+                
+                # Extraer dirección completa y barrio
+                full_address = self._extract_full_address(js_prop.get('full_address', ''), full_text)
+                property_data['full_address'] = full_address
+                
+                neighborhood = self._extract_neighborhood(js_prop.get('neighborhood', ''), full_text)
+                property_data['neighborhood'] = neighborhood
                 
                 # Extraer superficie
                 surface = self._extract_surface(js_prop.get('surface', ''), full_text)
@@ -250,6 +270,10 @@ class ZonaPropFullScraper:
                 # Extraer habitaciones
                 rooms = self._extract_rooms(js_prop.get('rooms', ''), full_text)
                 property_data['rooms'] = rooms
+                
+                # Extraer dormitorios por separado
+                bedrooms = self._extract_bedrooms(full_text)
+                property_data['bedrooms'] = bedrooms
                 
                 # Extraer descripción
                 description = self._extract_description(js_prop.get('description', ''), full_text)
@@ -270,22 +294,91 @@ class ZonaPropFullScraper:
             return []
     
     def _extract_price(self, direct_price: str, full_text: str) -> str:
-        """Extrae precio usando múltiples estrategias"""
+        """Extrae precio usando múltiples estrategias, evitando expensas"""
         if direct_price and direct_price.strip() and '$' in direct_price:
-            return direct_price.strip()
+            # Verificar que no sea una expensa
+            if 'expensas' not in direct_price.lower():
+                return direct_price.strip()
         
-        # Patrones de precio
+        # Patrones de precio más específicos que evitan expensas
         patterns = [
-            r'\$\s*[\d,\.]+',          # $123,456
-            r'USD\s*[\d,\.]+',         # USD 123,456
-            r'[\d,\.]+\s*USD',         # 123,456 USD
-            r'\$\s*[\d,\.]+\s*USD',    # $ 123,456 USD
+            # Patrones que explícitamente NO son expensas
+            r'USD\s*[\d,\.]+(?!\s*[Ee]xpensas)',         # USD 123,456 (no seguido de "expensas")
+            r'[\d,\.]+\s*USD(?!\s*[Ee]xpensas)',         # 123,456 USD (no seguido de "expensas")
+            r'U\$S\s*[\d,\.]+',                          # U$S 123,456
+            r'Dólares?\s*[\d,\.]+',                      # Dólares 123,456
+            # Pesos argentinos que NO sean expensas
+            r'\$\s*[\d,\.]+(?!\s*[Ee]xpensas)',          # $123,456 (no seguido de "expensas")
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, full_text)
-            if match:
-                return match.group(0).strip()
+            matches = re.findall(pattern, full_text)
+            if matches:
+                # Tomar el primer match que no contenga "expensas"
+                for match in matches:
+                    if 'expensas' not in match.lower():
+                        return match.strip()
+        
+        # Como último recurso, buscar patrones más generales pero filtrar expensas
+        general_patterns = [
+            r'\$\s*[\d,\.]+',
+            r'USD\s*[\d,\.]+',
+            r'[\d,\.]+\s*USD'
+        ]
+        
+        for pattern in general_patterns:
+            matches = re.findall(pattern, full_text)
+            for match in matches:
+                # Verificar el contexto alrededor del match para asegurar que no es expensa
+                match_index = full_text.find(match)
+                if match_index != -1:
+                    # Verificar 20 caracteres antes y después
+                    context_start = max(0, match_index - 20)
+                    context_end = min(len(full_text), match_index + len(match) + 20)
+                    context = full_text[context_start:context_end].lower()
+                    
+                    if 'expensas' not in context and 'gastos' not in context:
+                        return match.strip()
+        
+        return "N/A"
+    
+    def _extract_currency(self, direct_price: str, full_text: str, extracted_price: str) -> str:
+        """Extrae la moneda del precio"""
+        # Primero verificar en el precio extraído
+        if extracted_price and extracted_price != 'N/A':
+            if 'USD' in extracted_price.upper():
+                return 'USD'
+            elif '$' in extracted_price and 'USD' not in extracted_price.upper():
+                return 'ARS'
+        
+        # Verificar en el precio directo
+        if direct_price:
+            if 'USD' in direct_price.upper():
+                return 'USD'
+            elif '$' in direct_price and 'USD' not in direct_price.upper():
+                return 'ARS'
+        
+        # Buscar en el texto completo
+        if 'USD' in full_text.upper():
+            return 'USD'
+        elif '$' in full_text:
+            return 'ARS'
+        
+        # Patrones específicos
+        usd_patterns = [
+            r'USD\s*[\d,\.]+',
+            r'[\d,\.]+\s*USD',
+            r'U\$S\s*[\d,\.]+',
+            r'Dólares?'
+        ]
+        
+        for pattern in usd_patterns:
+            if re.search(pattern, full_text, re.IGNORECASE):
+                return 'USD'
+        
+        # Si hay precio pero no se puede determinar moneda, asumir ARS
+        if extracted_price and extracted_price != 'N/A':
+            return 'ARS'
         
         return "N/A"
     
@@ -402,6 +495,75 @@ class ZonaPropFullScraper:
                     return description
         
         return "N/A"
+    
+    def _extract_bedrooms(self, full_text: str) -> str:
+        """Extrae número de dormitorios específicamente"""
+        # Patrones específicos para dormitorios
+        patterns = [
+            r'(\d+)\s*dorm\.',           # 3 dorm.
+            r'(\d+)\s*dorm',             # 3 dorm
+            r'(\d+)\s*dormitorios?',     # 3 dormitorios
+            r'(\d+)\s*habitaciones?',    # 3 habitaciones
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                return match.group(0).strip()
+        
+        return "N/A"
+    
+    def _extract_full_address(self, direct_address: str, full_text: str) -> str:
+        """Extrae dirección completa con piso/unidad"""
+        if direct_address and direct_address.strip() and len(direct_address) > 5:
+            return direct_address.strip()
+        
+        # Patrones para direcciones completas
+        patterns = [
+            r'[A-Z][a-z\s]+\s+\d+\s*[A-Za-z°\s]*\d*[A-Za-z°]*',  # Marcelo T De Alvear 2199 6°G
+            r'[A-Z][a-z\s]+\s+al\s+\d+',                          # Av Corrientes al 1800
+            r'[A-Z][a-z\s]+\s+\d+\s+[A-Z][a-z\s]*',              # Las Heras 1700 Torre Brunetta
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, full_text)
+            if match:
+                address = match.group(0).strip()
+                if len(address) > 10:  # Filtrar matches muy cortos
+                    return address
+        
+        return "N/A"
+    
+    def _extract_neighborhood(self, direct_neighborhood: str, full_text: str) -> str:
+        """Extrae barrio específico"""
+        if direct_neighborhood and direct_neighborhood.strip() and len(direct_neighborhood) > 3:
+            return direct_neighborhood.strip()
+        
+        # Patrones para barrios
+        patterns = [
+            r'(Recoleta|Palermo|Belgrano|Villa Crespo|San Telmo|Puerto Madero|Caballito|Barracas|La Boca|Monserrat|San Nicolás|Retiro|Once|Balvanera|Almagro|Villa Urquiza|Núñez|Saavedra|Colegiales|Chacarita|Paternal|Villa Pueyrredón|Agronomía|Villa Ortúzar|Villa del Parque|Devoto|Villa Real|Monte Castro|Versalles|Liniers|Mataderos|Parque Avellaneda|Flores|Parque Chacabuco|Boedo|San Cristóbal|Constitución|Barracas|Pompeya|Nueva Pompeya|Parque Patricios|Soldati),?\s*(Capital|Buenos Aires|CABA)?',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        
+        return "N/A"
+    
+    def _build_full_url(self, relative_url: str) -> str:
+        """Construye URL completa desde URL relativa"""
+        if not relative_url or relative_url == 'N/A':
+            return "N/A"
+        
+        if relative_url.startswith('http'):
+            return relative_url
+        
+        base_url = "https://www.zonaprop.com.ar"
+        if relative_url.startswith('/'):
+            return base_url + relative_url
+        else:
+            return base_url + '/' + relative_url
     
     def _extract_additional_info(self, full_text: str) -> Dict[str, str]:
         """Extrae información adicional como baños, cocheras, etc."""
