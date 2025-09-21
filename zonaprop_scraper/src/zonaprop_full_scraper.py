@@ -5,6 +5,7 @@ import csv
 import re
 import time
 import argparse
+import glob
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -33,6 +34,7 @@ class ZonaPropFullScraper:
         self.incognito = incognito
         self.delay = delay
         self.scraped_data = []
+        self.last_saved_count = 0  # Track how many properties have been saved
         
         # Configurar logging
         logging.basicConfig(
@@ -47,8 +49,46 @@ class ZonaPropFullScraper:
         
         self.logger.info("ZonaProp Full Scraper inicializado con CDP Mode")
     
+    def load_existing_data(self, resume_file: str) -> bool:
+        """
+        Carga datos existentes desde un archivo para continuar la extracción
+        
+        Args:
+            resume_file: Nombre base del archivo (sin timestamp)
+            
+        Returns:
+            True si se cargaron datos exitosamente
+        """
+        try:
+            # Buscar archivos existentes con el patrón
+            data_dir = Path("data/raw")
+            json_pattern = str(data_dir / f"{resume_file}_*.json")
+            json_files = glob.glob(json_pattern)
+            
+            if not json_files:
+                self.logger.warning(f"No se encontraron archivos existentes para {resume_file}")
+                return False
+            
+            # Usar el archivo más reciente
+            latest_file = max(json_files, key=lambda x: Path(x).stat().st_mtime)
+            
+            with open(latest_file, 'r', encoding='utf-8') as f:
+                existing_data = json.load(f)
+            
+            if existing_data:
+                self.scraped_data = existing_data
+                self.last_saved_count = len(existing_data)  # Set saved count to loaded data
+                self.logger.info(f"📂 Cargados {len(existing_data)} registros existentes desde {latest_file}")
+                return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error cargando datos existentes: {e}")
+            
+        return False
+    
     def scrape_multiple_pages(self, start_page: int = 1, max_pages: int = 5, 
-                            properties_per_page: int = 25) -> List[Dict[str, Any]]:
+                            properties_per_page: int = 25, save_every: int = 0, 
+                            output_name: str = "zonaprop_full", output_format: str = "both") -> List[Dict[str, Any]]:
         """
         Scraper principal para múltiples páginas
         
@@ -86,6 +126,12 @@ class ZonaPropFullScraper:
                         total_extracted += len(page_properties)
                         self.logger.info(f"✅ Página {page_num}: {len(page_properties)} propiedades extraídas")
                         self.logger.info(f"📊 Total acumulado: {total_extracted} propiedades")
+                        
+                        # Guardar progreso incrementalmente si está configurado
+                        if save_every > 0 and page_num % save_every == 0:
+                            self.logger.info(f"💾 Guardando progreso en página {page_num}...")
+                            self.save_data(output_name, output_format, append_mode=True)
+                            
                     else:
                         self.logger.warning(f"⚠️  Página {page_num}: No se extrajeron propiedades")
                         failed_pages.append(page_num)
@@ -134,7 +180,18 @@ class ZonaPropFullScraper:
             
             # Activar CDP Mode para bypass automático de Cloudflare
             sb.activate_cdp_mode(url)
-            time.sleep(2)
+            
+            # Force refresh to ensure new page content is loaded
+            sb.refresh()
+            time.sleep(3)
+            
+            # Verify we're on the correct URL
+            current_url = sb.get_current_url()
+            if str(page_number) not in current_url and page_number > 1:
+                self.logger.warning(f"⚠️  URL mismatch. Expected page {page_number}, got: {current_url}")
+                # Try direct navigation as fallback
+                sb.open(url)
+                time.sleep(2)
             
             # Verificar título
             title = sb.get_title()
@@ -281,6 +338,21 @@ class ZonaPropFullScraper:
                 
                 # Extraer información adicional
                 property_data.update(self._extract_additional_info(full_text))
+                
+                # AMENITIES DEL EDIFICIO
+                property_data.update(self._extract_building_amenities(full_text))
+                
+                # TIPO DE PROPIEDAD Y CARACTERÍSTICAS
+                property_data.update(self._extract_property_characteristics(full_text))
+                
+                # INFORMACIÓN DE PISO Y ORIENTACIÓN
+                property_data.update(self._extract_floor_and_orientation(full_text))
+                
+                # SERVICIOS Y SEGURIDAD
+                property_data.update(self._extract_security_services(full_text))
+                
+                # ESTADO Y CONDICIÓN
+                property_data.update(self._extract_property_condition(full_text))
                 
                 # Solo agregar si tiene datos válidos
                 if self._is_valid_property(property_data):
@@ -586,6 +658,116 @@ class ZonaPropFullScraper:
         
         return additional
     
+    def _extract_building_amenities(self, full_text: str) -> Dict[str, bool]:
+        """Extrae amenities del edificio"""
+        amenities = {}
+        text_lower = full_text.lower()
+        
+        # Amenities principales con múltiples variaciones
+        amenity_patterns = {
+            'has_pool': ['pileta', 'piscina', 'pool', 'natación'],
+            'has_gym': ['gimnasio', 'gym', 'fitness', 'aparatos'],
+            'has_sum': ['sum', 'salón de usos múltiples', 'salon de usos multiples', 'salón social', 'salon social'],
+            'has_grill': ['parrilla', 'barbacoa', 'quincho', 'asador'],
+        }
+        
+        for amenity_key, patterns in amenity_patterns.items():
+            amenities[amenity_key] = any(pattern in text_lower for pattern in patterns)
+        
+        return amenities
+    
+    def _extract_security_services(self, full_text: str) -> Dict[str, Any]:
+        """Extrae servicios de seguridad y edificio"""
+        services = {}
+        text_lower = full_text.lower()
+        
+        # Servicios de seguridad
+        services['has_doorman'] = any(term in text_lower for term in ['portero', 'portería', 'porteria', 'conserje'])
+        services['has_security'] = any(term in text_lower for term in ['seguridad', 'vigilancia', '24hs', '24 hs', 'guardia'])
+    
+        # Otros servicios
+        services['has_storage'] = any(term in text_lower for term in ['baulera', 'depósito', 'deposito', 'storage'])
+        return services
+    
+    def _extract_property_characteristics(self, full_text: str) -> Dict[str, str]:
+        """Extrae características específicas de la propiedad"""
+        characteristics = {}
+        text_lower = full_text.lower()
+        
+        # Tipo de propiedad
+        property_types = {
+            'departamento': ['departamento', 'depto', 'dept'],
+            'casa': ['casa'],
+            'ph': ['ph', 'p.h.', 'casa chorizo'],
+            'loft': ['loft'],
+            'duplex': ['duplex', 'dúplex'],
+            'triplex': ['triplex', 'tríplex'],
+            'monoambiente': ['monoambiente', 'mono ambiente', 'studio'],
+        }
+        
+        for prop_type, patterns in property_types.items():
+            if any(pattern in text_lower for pattern in patterns):
+                characteristics['property_type'] = prop_type
+                break
+        else:
+            characteristics['property_type'] = 'N/A'
+        return characteristics
+    
+    def _extract_floor_and_orientation(self, full_text: str) -> Dict[str, Any]:
+        """Extrae información de piso y orientación"""
+        floor_info = {}
+        
+        # Número de piso
+        floor_patterns = [
+            r'(\d+)°?\s*piso',
+            r'piso\s*(\d+)',
+            r'(\d+)°\s*[A-Z]',  # 4°A, 5°B, etc.
+        ]
+        
+        floor_number = None
+        for pattern in floor_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                floor_number = int(match.group(1))
+                break
+        
+        floor_info['floor_number'] = floor_number if floor_number else 0
+        
+        # Pisos totales del edificio
+        total_floors_match = re.search(r'(\d+)\s*pisos?', full_text, re.IGNORECASE)
+        if total_floors_match:
+            floor_info['total_floors'] = int(total_floors_match.group(1))
+        else:
+            floor_info['total_floors'] = 0
+        
+        # Información de balcones
+        balcony_match = re.search(r'(\d+)\s*balcón|balcón', full_text, re.IGNORECASE)
+        if balcony_match:
+            if balcony_match.group(1):
+                floor_info['balcony_count'] = int(balcony_match.group(1))
+            else:
+                floor_info['balcony_count'] = 1
+        else:
+            floor_info['balcony_count'] = 0
+        
+        return floor_info
+    
+    def _extract_property_condition(self, full_text: str) -> Dict[str, str]:
+        """Extrae estado y condición de la propiedad"""
+        condition = {}
+        text_lower = full_text.lower()
+        
+        # Estado de la propiedad
+        if any(term in text_lower for term in ['a estrenar', 'nuevo', 'brand new']):
+            condition['property_status'] = 'a estrenar'
+        elif any(term in text_lower for term in ['en construcción', 'en construccion', 'under construction']):
+            condition['property_status'] = 'en construcción'
+        elif any(term in text_lower for term in ['usado', 'segunda mano']):
+            condition['property_status'] = 'usado'
+        else:
+            condition['property_status'] = 'N/A'
+        return condition
+    
     def _is_valid_property(self, property_data: Dict[str, Any]) -> bool:
         """Verifica si la propiedad tiene datos válidos"""
         required_fields = ['price', 'location', 'surface', 'rooms']
@@ -595,13 +777,14 @@ class ZonaPropFullScraper:
         # Considerar válida si tiene al menos 2 campos válidos
         return valid_count >= 2
     
-    def save_data(self, filename: str = "zonaprop_full_scraping", format: str = "both") -> Dict[str, str]:
+    def save_data(self, filename: str = "zonaprop_full_scraping", format: str = "both", append_mode: bool = False) -> Dict[str, str]:
         """
         Guarda los datos extraídos
         
         Args:
             filename: Nombre base del archivo
             format: 'csv', 'json', o 'both'
+            append_mode: Si True, append a archivo existente; si False, crea nuevo con timestamp
             
         Returns:
             Dict con las rutas de los archivos guardados
@@ -610,40 +793,93 @@ class ZonaPropFullScraper:
             self.logger.warning("⚠️  No hay datos para guardar")
             return {}
         
+        # Determine what data to save
+        if append_mode and self.last_saved_count > 0:
+            # Only save new data since last save
+            data_to_save = self.scraped_data[self.last_saved_count:]
+            if not data_to_save:
+                self.logger.info("📝 No hay nuevos datos para guardar")
+                return {}
+        else:
+            # Save all data (first save or non-append mode)
+            data_to_save = self.scraped_data
+        
         # Crear directorio de salida
         output_dir = Path("data/raw")
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         saved_files = {}
+        
+        if append_mode:
+            # Modo append: usar archivo sin timestamp
+            csv_file = output_dir / f"{filename}.csv"
+            json_file = output_dir / f"{filename}.json"
+        else:
+            # Modo normal: crear archivo con timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_file = output_dir / f"{filename}_{timestamp}.csv"
+            json_file = output_dir / f"{filename}_{timestamp}.json"
         
         # Guardar CSV
         if format in ['csv', 'both']:
-            csv_file = output_dir / f"{filename}_{timestamp}.csv"
-            with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-                if self.scraped_data:
-                    # Obtener todos los campos únicos de todas las propiedades
-                    all_fields = set()
-                    for prop in self.scraped_data:
-                        all_fields.update(prop.keys())
-                    
-                    writer = csv.DictWriter(f, fieldnames=sorted(all_fields))
+            # Obtener todos los campos únicos
+            all_fields = set()
+            for prop in data_to_save:
+                all_fields.update(prop.keys())
+            sorted_fields = sorted(all_fields)
+            
+            if append_mode and csv_file.exists():
+                # Append mode: agregar sin header
+                with open(csv_file, 'a', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=sorted_fields)
+                    writer.writerows(data_to_save)
+                self.logger.info(f"💾 CSV actualizado (append): {csv_file} - Agregadas {len(data_to_save)} propiedades")
+            else:
+                # Write mode: crear nuevo archivo con header
+                with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=sorted_fields)
                     writer.writeheader()
-                    writer.writerows(self.scraped_data)
+                    writer.writerows(data_to_save)
+                self.logger.info(f"💾 CSV guardado: {csv_file}")
+            
             saved_files['csv'] = str(csv_file)
-            self.logger.info(f"💾 CSV guardado: {csv_file}")
         
         # Guardar JSON
         if format in ['json', 'both']:
-            json_file = output_dir / f"{filename}_{timestamp}.json"
-            with open(json_file, 'w', encoding='utf-8') as f:
-                json.dump(self.scraped_data, f, ensure_ascii=False, indent=2)
+            if append_mode and json_file.exists():
+                # Append mode: leer archivo existente, agregar nuevos datos, y reescribir
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        existing_data = json.load(f)
+                    
+                    # Combinar datos existentes con nuevos
+                    combined_data = existing_data + data_to_save
+                    
+                    with open(json_file, 'w', encoding='utf-8') as f:
+                        json.dump(combined_data, f, ensure_ascii=False, indent=2)
+                    
+                    self.logger.info(f"💾 JSON actualizado (append): {json_file} - Agregadas {len(data_to_save)} propiedades, Total: {len(combined_data)}")
+                except Exception as e:
+                    self.logger.error(f"❌ Error al hacer append en JSON: {e}")
+                    # Fallback: crear nuevo archivo
+                    with open(json_file, 'w', encoding='utf-8') as f:
+                        json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+                    self.logger.info(f"💾 JSON guardado (fallback): {json_file}")
+            else:
+                # Write mode: crear nuevo archivo
+                with open(json_file, 'w', encoding='utf-8') as f:
+                    json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+                self.logger.info(f"💾 JSON guardado: {json_file}")
+            
             saved_files['json'] = str(json_file)
-            self.logger.info(f"💾 JSON guardado: {json_file}")
         
-        # Mostrar estadísticas
-        self._show_statistics()
+        # Update the saved count after successful save
+        if append_mode:
+            self.last_saved_count = len(self.scraped_data)
+        
+        # Mostrar estadísticas solo si no es modo append
+        if not append_mode:
+            self._show_statistics()
         
         return saved_files
     
@@ -712,6 +948,8 @@ def main():
     parser.add_argument("--no-incognito", action="store_true", help="Desactivar modo incógnito")
     parser.add_argument("--delay", type=float, default=3.0, help="Delay entre páginas en segundos (default: 3.0)")
     parser.add_argument("--properties-per-page", type=int, default=25, help="Propiedades por página (default: 25)")
+    parser.add_argument("--resume", type=str, help="Resume extraction by appending to existing file (provide base filename without timestamp)")
+    parser.add_argument("--save-every", type=int, default=0, help="Save progress every N pages (0 = save only at end)")
     
     args = parser.parse_args()
     
@@ -728,16 +966,34 @@ def main():
             delay=args.delay
         )
         
+        # Cargar datos existentes si se especifica resume
+        if args.resume:
+            print(f"🔄 Modo resume activado: {args.resume}")
+            if scraper.load_existing_data(args.resume):
+                existing_count = len(scraper.scraped_data)
+                print(f"📂 Continuando desde {existing_count} propiedades existentes")
+            else:
+                print("⚠️  No se encontraron datos existentes, iniciando desde cero")
+        
+        
         # Ejecutar scraping
+        output_name = args.resume if args.resume else args.output
         data = scraper.scrape_multiple_pages(
             start_page=args.start_page,
             max_pages=args.pages,
-            properties_per_page=args.properties_per_page
+            properties_per_page=args.properties_per_page,
+            save_every=args.save_every,
+            output_name=output_name,
+            output_format=args.format
         )
         
         # Guardar datos
         if data:
-            saved_files = scraper.save_data(args.output, args.format)
+            # Usar el nombre del archivo resume si está disponible, sino usar args.output
+            output_name = args.resume if args.resume else args.output
+            # Si save_every está habilitado, usar append mode para el guardado final también
+            use_append = args.save_every > 0
+            saved_files = scraper.save_data(output_name, args.format, append_mode=use_append)
             
             print(f"\n🎉 SCRAPING COMPLETADO EXITOSAMENTE!")
             print(f"📊 Total extraído: {len(data)} propiedades")
