@@ -185,14 +185,6 @@ class ZonaPropFullScraper:
             sb.refresh()
             time.sleep(3)
             
-            # Verify we're on the correct URL
-            current_url = sb.get_current_url()
-            if str(page_number) not in current_url and page_number > 1:
-                self.logger.warning(f"⚠️  URL mismatch. Expected page {page_number}, got: {current_url}")
-                # Try direct navigation as fallback
-                sb.open(url)
-                time.sleep(2)
-            
             # Verificar título
             title = sb.get_title()
             self.logger.debug(f"Título página {page_number}: {title}")
@@ -289,14 +281,7 @@ class ZonaPropFullScraper:
             for i, js_prop in enumerate(js_results[:max_properties]):
                 
                 property_data = {
-                    'id': f"prop_{page_number}_{i+1}",
-                    'page': page_number,
-                    'position': i + 1,
-                    'scraping_date': datetime.now().isoformat(),
-                    'extraction_method': 'cdp_javascript_regex',
-                    # Add new fields
                     'property_id': js_prop.get('property_id', 'N/A'),
-                    'property_url': self._build_full_url(js_prop.get('property_url', ''))
                 }
                 
                 full_text = js_prop.get('full_text', '')
@@ -331,10 +316,6 @@ class ZonaPropFullScraper:
                 # Extraer dormitorios por separado
                 bedrooms = self._extract_bedrooms(full_text)
                 property_data['bedrooms'] = bedrooms
-                
-                # Extraer descripción
-                description = self._extract_description(js_prop.get('description', ''), full_text)
-                property_data['description'] = description
                 
                 # Extraer información adicional
                 property_data.update(self._extract_additional_info(full_text))
