@@ -295,9 +295,30 @@ class ProperatiFullScraper:
                 var description = snippet.querySelector('.description');
                 if (description) property.description = description.textContent.trim();
                 
-                // Buscar publisher
+                // Buscar publisher/agencia
                 var publisher = snippet.querySelector('.publisher');
                 if (publisher) property.publisher = publisher.textContent.trim();
+                
+                var agency = snippet.querySelector('.agency__name');
+                if (agency) property.agency_name = agency.textContent.trim();
+                
+                // Buscar fecha de publicación
+                var published_date = snippet.querySelector('.published-date');
+                if (published_date) property.published_date = published_date.textContent.trim();
+                
+                // Buscar número de fotos
+                var photo_total = snippet.querySelector('.swiper-pagination-total');
+                if (photo_total) property.photo_count = photo_total.textContent.trim();
+                
+                // Buscar etiquetas especiales (DESTACADO, etc.)
+                var labels = snippet.querySelectorAll('.label');
+                property.labels = [];
+                labels.forEach(function(label) {
+                    property.labels.push(label.textContent.trim());
+                });
+                
+                // Extraer texto completo para análisis posterior
+                property.full_text = snippet.textContent.trim();
                 
                 properties.push(property);
             });
@@ -317,6 +338,53 @@ class ProperatiFullScraper:
                 property_data = {
                     'property_id': js_prop.get('property_id', 'N/A'),
                     'page_number': page_number,
+                    
+                    # Basic fields
+                    'title': None,
+                    'price': None,
+                    'currency': None,
+                    'location': None,
+                    'neighborhood': None,
+                    'full_address': None,
+                    'bedrooms': None,
+                    'bathrooms': None,
+                    'rooms': None,
+                    'area': None,
+                    'surface_total': None,
+                    'surface_covered': None,
+                    'amenities': [],
+                    'property_type': None,
+                    'property_status': None,
+                    'description': None,
+                    'publisher': None,
+                    'agency_name': None,
+                    'published_date': None,
+                    'detail_url': None,
+                    'scraping_date': None,
+                    
+                    # Additional fields from ZonaProp
+                    'expenses': None,
+                    'parking_spaces': None,
+                    'floor_number': None,
+                    'total_floors': None,
+                    'balcony_count': 0,
+                    'orientation': None,
+                    
+                    # Amenities flags
+                    'has_pool': False,
+                    'has_gym': False,
+                    'has_security': False,
+                    'has_doorman': False,
+                    'has_storage': False,
+                    'has_grill': False,
+                    'has_sum': False,
+                    'has_balcony': False,
+                    'has_terrace': False,
+                    'has_garage': False,
+                    
+                    # Photo and labels
+                    'photo_count': 0,
+                    'labels': []
                 }
                 
                 # Procesar título
@@ -334,6 +402,7 @@ class ProperatiFullScraper:
                 location_info = self._extract_location_info(location_text)
                 property_data['location'] = location_info['full_location']
                 property_data['neighborhood'] = location_info['neighborhood']
+                property_data['full_address'] = location_text  # Use location as full address
                 
                 # Procesar dormitorios
                 bedrooms_text = js_prop.get('bedrooms', '')
@@ -345,21 +414,43 @@ class ProperatiFullScraper:
                 
                 # Procesar área
                 area_text = js_prop.get('area', '')
-                property_data['area'] = self._extract_area(area_text)
+                area_value = self._extract_area(area_text)
+                property_data['area'] = area_value
+                property_data['surface_total'] = area_value  # Use area as surface total
                 
-                # Procesar amenities
+                # Procesar amenities y características especiales
                 properties_text = js_prop.get('properties_text', '')
                 amenities_list = js_prop.get('amenities', [])
-                property_data['amenities'] = self._extract_amenities(properties_text, amenities_list)
+                full_text = js_prop.get('full_text', '').lower()
                 
-                # Tipo de propiedad
-                property_data['property_type'] = self._extract_property_type(title)
+                amenities_result = self._extract_comprehensive_amenities(properties_text, amenities_list, full_text)
+                property_data.update(amenities_result)
+                
+                # Tipo de propiedad y estado
+                property_type_info = self._extract_property_type_and_status(title)
+                property_data['property_type'] = property_type_info['type']
+                property_data['property_status'] = property_type_info['status']
                 
                 # Descripción
                 property_data['description'] = js_prop.get('description', None)
                 
-                # Publisher
+                # Publisher y agencia
                 property_data['publisher'] = js_prop.get('publisher', None)
+                property_data['agency_name'] = js_prop.get('agency_name', None)
+                
+                # Fecha de publicación
+                property_data['published_date'] = js_prop.get('published_date', None)
+                
+                # Número de fotos
+                photo_count_text = js_prop.get('photo_count', '')
+                property_data['photo_count'] = self._extract_photo_count(photo_count_text)
+                
+                # Etiquetas especiales
+                property_data['labels'] = js_prop.get('labels', [])
+                
+                # Extraer información adicional del texto completo
+                additional_info = self._extract_additional_info(full_text)
+                property_data.update(additional_info)
                 
                 # URL de detalle
                 detail_url = js_prop.get('detail_url', '')
@@ -529,6 +620,169 @@ class ProperatiFullScraper:
         
         # Considerar válida si tiene al menos 2 campos válidos
         return valid_count >= 2
+    
+    def _extract_comprehensive_amenities(self, properties_text: str, amenities_list: List[str], full_text: str) -> Dict[str, Any]:
+        """Extrae amenities completos y flags booleanos"""
+        result = {
+            'amenities': [],
+            'has_pool': False,
+            'has_gym': False,
+            'has_security': False,
+            'has_doorman': False,
+            'has_storage': False,
+            'has_grill': False,
+            'has_sum': False,
+            'has_balcony': False,
+            'has_terrace': False,
+            'has_garage': False,
+            'parking_spaces': None,
+            'balcony_count': 0,
+            'rooms': None
+        }
+        
+        # Combinar todas las fuentes de texto
+        combined_text = f"{properties_text} {' '.join(amenities_list)} {full_text}".lower()
+        
+        # Extraer amenities básicos
+        for amenity in amenities_list:
+            if amenity:
+                result['amenities'].append(amenity)
+        
+        # Detectar amenities específicos y establecer flags
+        if any(word in combined_text for word in ['balcón', 'balcon']):
+            result['has_balcony'] = True
+            result['balcony_count'] = 1
+            if 'balcón' not in [a.lower() for a in result['amenities']]:
+                result['amenities'].append('Balcón')
+        
+        if any(word in combined_text for word in ['terraza', 'terrasse']):
+            result['has_terrace'] = True
+            if 'terraza' not in [a.lower() for a in result['amenities']]:
+                result['amenities'].append('Terraza')
+        
+        if any(word in combined_text for word in ['cochera', 'garage', 'estacionamiento']):
+            result['has_garage'] = True
+            # Buscar número de cocheras
+            parking_match = re.search(r'(\d+)\s*cochera', combined_text)
+            if parking_match:
+                result['parking_spaces'] = int(parking_match.group(1))
+        
+        if any(word in combined_text for word in ['piscina', 'pileta', 'pool']):
+            result['has_pool'] = True
+        
+        if any(word in combined_text for word in ['gimnasio', 'gym']):
+            result['has_gym'] = True
+        
+        if any(word in combined_text for word in ['seguridad', 'vigilancia', 'security']):
+            result['has_security'] = True
+        
+        if any(word in combined_text for word in ['portero', 'conserje', 'doorman']):
+            result['has_doorman'] = True
+        
+        if any(word in combined_text for word in ['baulera', 'storage', 'depósito']):
+            result['has_storage'] = True
+        
+        if any(word in combined_text for word in ['parrilla', 'asador', 'grill']):
+            result['has_grill'] = True
+        
+        if any(word in combined_text for word in ['sum', 'salón', 'salon']):
+            result['has_sum'] = True
+        
+        # Extraer número de ambientes
+        rooms_match = re.search(r'(\d+)\s*amb', combined_text)
+        if rooms_match:
+            result['rooms'] = int(rooms_match.group(1))
+        
+        return result
+    
+    def _extract_property_type_and_status(self, title: str) -> Dict[str, str]:
+        """Extrae tipo de propiedad y estado"""
+        if not title:
+            return {'type': None, 'status': None}
+        
+        title_lower = title.lower()
+        
+        # Tipo de propiedad
+        property_type = None
+        if 'departamento' in title_lower:
+            property_type = 'Departamento'
+        elif 'casa' in title_lower:
+            property_type = 'Casa'
+        elif 'ph' in title_lower:
+            property_type = 'PH'
+        elif 'local' in title_lower:
+            property_type = 'Local'
+        elif 'oficina' in title_lower:
+            property_type = 'Oficina'
+        elif 'terreno' in title_lower or 'lote' in title_lower:
+            property_type = 'Terreno'
+        elif 'loft' in title_lower:
+            property_type = 'Loft'
+        elif 'duplex' in title_lower:
+            property_type = 'Duplex'
+        
+        # Estado de la propiedad
+        property_status = None
+        if 'a estrenar' in title_lower:
+            property_status = 'a estrenar'
+        elif 'en construcción' in title_lower:
+            property_status = 'en construcción'
+        elif 'usado' in title_lower:
+            property_status = 'usado'
+        elif 'muy bueno' in title_lower:
+            property_status = 'muy bueno'
+        elif 'excelente' in title_lower:
+            property_status = 'excelente'
+        
+        return {'type': property_type, 'status': property_status}
+    
+    def _extract_photo_count(self, photo_text: str) -> int:
+        """Extrae número de fotos"""
+        if not photo_text:
+            return 0
+        
+        match = re.search(r'\d+', photo_text)
+        return int(match.group()) if match else 0
+    
+    def _extract_additional_info(self, full_text: str) -> Dict[str, Any]:
+        """Extrae información adicional del texto completo"""
+        result = {
+            'floor_number': None,
+            'total_floors': None,
+            'orientation': None,
+            'expenses': None
+        }
+        
+        if not full_text:
+            return result
+        
+        # Número de piso
+        floor_patterns = [
+            r'(\d+)°?\s*piso',
+            r'piso\s*(\d+)',
+            r'(\d+)°'
+        ]
+        
+        for pattern in floor_patterns:
+            match = re.search(pattern, full_text)
+            if match:
+                result['floor_number'] = int(match.group(1))
+                break
+        
+        # Orientación
+        if 'al frente' in full_text:
+            result['orientation'] = 'frente'
+        elif 'contrafrente' in full_text:
+            result['orientation'] = 'contrafrente'
+        elif 'interno' in full_text:
+            result['orientation'] = 'interno'
+        
+        # Expensas
+        expenses_match = re.search(r'expensas?\s*\$?\s*(\d+)', full_text)
+        if expenses_match:
+            result['expenses'] = int(expenses_match.group(1))
+        
+        return result
     
     def save_data(self, filename: str = "properati_full_scraping", format: str = "both", append_mode: bool = False) -> Dict[str, str]:
         """
