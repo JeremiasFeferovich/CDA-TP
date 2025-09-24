@@ -188,25 +188,77 @@ class ProperatiFullScraper:
                 # Para páginas siguientes, usar el botón "Siguiente"
                 self.logger.info(f"🔄 Navegando a página {page_number} usando botón de paginación")
                 
-                # Scroll hacia abajo para asegurar que el botón de paginación esté visible
-                sb.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(2)
+                # Scroll gradual para encontrar el botón de paginación (90% de la página)
+                sb.execute_script("""
+                    const targetScroll = document.body.scrollHeight * 0.9;
+                    window.scrollTo({
+                        top: targetScroll,
+                        behavior: 'smooth'
+                    });
+                """)
+                time.sleep(2)  # Dar tiempo para que termine el scroll suave
                 
-                # Navegar directamente a la URL de la página
-                try:
-                    # Construir la URL específica para la página
-                    page_url = f"https://www.properati.com.ar/s/capital-federal/venta/{page_number}"
-                    self.logger.info(f"🌐 Navegando directamente a página {page_number}: {page_url}")
-                    
-                    # Navegar directamente a la URL
-                    sb.get(page_url)
-                    time.sleep(4)  # Esperar a que cargue la página
-                    
-                    self.logger.info(f"✅ Navegación exitosa a página {page_number}")
+                # Intentar encontrar y hacer clic en el botón de paginación
+                pagination_success = False
+                
+                # Selectores para botones de paginación (en orden de prioridad)
+                pagination_selectors = [
+                    f'a[href*="/venta/{page_number}"]',  # Link directo a la página específica
+                    f'button:contains("{page_number}")',  # Botón con el número de página
+                    'a:contains("Siguiente")',  # Link "Siguiente"
+                    'button:contains("Siguiente")',  # Botón "Siguiente"
+                    '.pagination a[rel="next"]',  # Link de siguiente página
+                    '.pagination .next',  # Clase next en paginación
+                    'a[aria-label="Siguiente"]',  # Aria label para siguiente
+                    'button[aria-label="Siguiente"]',  # Botón con aria label
+                    '.pagination a:last-child'  # Último link en paginación
+                ]
+                
+                self.logger.info(f"🔍 Buscando botones de paginación...")
+                
+                for i, selector in enumerate(pagination_selectors):
+                    try:
+                        if sb.is_element_visible(selector):
+                            self.logger.info(f"🎯 Encontrado botón de paginación [{i+1}]: {selector}")
+                            
+                            # Hacer scroll para asegurar que el elemento esté visible
+                            sb.execute_script(f"document.querySelector('{selector}')?.scrollIntoView({{behavior: 'smooth', block: 'center'}});")
+                            time.sleep(1)
+                            
+                            # Intentar hacer clic
+                            sb.click(selector)
+                            time.sleep(3)  # Esperar navegación
+                            
+                            # Verificar si la navegación fue exitosa
+                            current_url = sb.get_current_url()
+                            expected_in_url = f"venta/{page_number}" if page_number > 1 else "venta"
+                            
+                            if expected_in_url in current_url:
+                                self.logger.info(f"✅ Navegación exitosa usando botón de paginación: página {page_number}")
+                                pagination_success = True
+                                break
+                            else:
+                                self.logger.warning(f"⚠️  Botón clickeado pero URL no cambió correctamente. URL actual: {current_url}")
                         
-                except Exception as e:
-                    self.logger.error(f"❌ Error navegando a página {page_number}: {e}")
-                    return False
+                    except Exception as e:
+                        self.logger.debug(f"❌ Error con selector [{i+1}] {selector}: {e}")
+                        continue
+                
+                # Si la navegación por botón falló, usar navegación directa como fallback
+                if not pagination_success:
+                    self.logger.warning(f"⚠️  No se pudo navegar usando botones. Usando navegación directa como fallback...")
+                    try:
+                        page_url = f"https://www.properati.com.ar/s/capital-federal/venta/{page_number}"
+                        self.logger.info(f"🌐 Navegando directamente a página {page_number}: {page_url}")
+                        sb.get(page_url)
+                        time.sleep(4)
+                        self.logger.info(f"✅ Navegación directa exitosa a página {page_number}")
+                        return True
+                    except Exception as e:
+                        self.logger.error(f"❌ Error navegando directamente a página {page_number}: {e}")
+                        return False
+                
+                return pagination_success
             
             # Verificar que la página se cargó correctamente y hay propiedades
             try:
@@ -1147,6 +1199,281 @@ class ProperatiFullScraper:
         
         return processed_batch
     
+    def _extract_coordinates_from_jsonld(self, sb) -> Dict[str, Dict[str, float]]:
+        """Extrae coordenadas desde JSON-LD estructurado en la página de listado (ULTRA RÁPIDO)"""
+        coordinate_extraction_script = """
+        // Extraer coordenadas desde JSON-LD estructurado
+        var coordinatesMap = {};
+        
+        // Buscar scripts JSON-LD
+        var jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+        
+        jsonLdScripts.forEach(function(script) {
+            try {
+                var data = JSON.parse(script.textContent);
+                
+                // Manejar arrays de objetos
+                var items = Array.isArray(data) ? data : [data];
+                
+                items.forEach(function(item) {
+                    // Buscar coordenadas en geo.latitude/longitude
+                    if (item.geo && item.geo.latitude && item.geo.longitude) {
+                        var lat = parseFloat(item.geo.latitude);
+                        var lng = parseFloat(item.geo.longitude);
+                        
+                        // Validar coordenadas de Buenos Aires
+                        if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
+                            // Usar la dirección como clave única
+                            var key = item.address ? item.address.streetAddress : item.name;
+                            if (key) {
+                                coordinatesMap[key] = {
+                                    latitude: lat,
+                                    longitude: lng,
+                                    name: item.name || '',
+                                    locality: item.address ? item.address.addressLocality : ''
+                                };
+                            }
+                        }
+                    }
+                });
+            } catch (e) {
+                // Ignorar errores de parsing
+            }
+        });
+        
+        return coordinatesMap;
+        """
+        
+        try:
+            result = sb.execute_script(coordinate_extraction_script)
+            if result and isinstance(result, dict):
+                self.logger.info(f"🗺️  JSON-LD: Extraídas {len(result)} coordenadas de la página")
+                return result
+            else:
+                self.logger.warning(f"⚠️  JSON-LD: No se encontraron coordenadas estructuradas")
+                return {}
+        except Exception as e:
+            self.logger.error(f"❌ Error extrayendo coordenadas JSON-LD: {e}")
+            return {}
+    
+    def _extract_coordinates_from_scripts_fast(self, sb) -> Dict[str, Dict[str, float]]:
+        """Método alternativo rápido para extraer coordenadas desde scripts"""
+        coordinate_extraction_script = """
+        // Extraer coordenadas desde scripts (método alternativo)
+        var coordinatesMap = {};
+        var coordIndex = 0;
+        
+        // Buscar en todos los scripts
+        var scripts = document.querySelectorAll('script');
+        scripts.forEach(function(script) {
+            var content = script.textContent || script.innerHTML;
+            if (content && content.includes('latitude') && content.includes('longitude')) {
+                // Buscar patrones de coordenadas
+                var latPattern = /"latitude":\s*"?(-?\d+\.?\d*)"?/g;
+                var lngPattern = /"longitude":\s*"?(-?\d+\.?\d*)"?/g;
+                
+                var latMatches = [];
+                var lngMatches = [];
+                var match;
+                
+                // Extraer todas las latitudes
+                while ((match = latPattern.exec(content)) !== null) {
+                    var lat = parseFloat(match[1]);
+                    if (lat > -35.5 && lat < -33.5) {
+                        latMatches.push(lat);
+                    }
+                }
+                
+                // Extraer todas las longitudes
+                while ((match = lngPattern.exec(content)) !== null) {
+                    var lng = parseFloat(match[1]);
+                    if (lng > -59.5 && lng < -57.0) {
+                        lngMatches.push(lng);
+                    }
+                }
+                
+                // Emparejar coordenadas
+                var minLength = Math.min(latMatches.length, lngMatches.length);
+                for (var i = 0; i < minLength; i++) {
+                    coordinatesMap['prop_' + coordIndex] = {
+                        latitude: latMatches[i],
+                        longitude: lngMatches[i]
+                    };
+                    coordIndex++;
+                }
+            }
+        });
+        
+        return coordinatesMap;
+        """
+        
+        try:
+            result = sb.execute_script(coordinate_extraction_script)
+            if result and isinstance(result, dict):
+                self.logger.info(f"🔍 Scripts: Extraídas {len(result)} coordenadas alternativas")
+                return result
+            else:
+                self.logger.debug(f"🔍 Scripts: No se encontraron coordenadas")
+                return {}
+        except Exception as e:
+            self.logger.error(f"❌ Error extrayendo coordenadas de scripts: {e}")
+            return {}
+    
+    def _match_property_coordinates(self, properties: List[Dict], coordinates_map: Dict) -> List[Dict]:
+        """Asigna coordenadas a propiedades usando coincidencia de texto"""
+        matched_count = 0
+        
+        for prop in properties:
+            # Intentar diferentes claves para hacer match
+            match_keys = [
+                prop.get('title', ''),
+                prop.get('location', ''),
+                prop.get('neighborhood', ''),
+                prop.get('full_address', '')
+            ]
+            
+            coordinate_found = False
+            
+            # Buscar coincidencias en el mapa de coordenadas
+            for coord_key, coord_data in coordinates_map.items():
+                for match_key in match_keys:
+                    if match_key and coord_key and (
+                        match_key.lower() in coord_key.lower() or 
+                        coord_key.lower() in match_key.lower() or
+                        coord_data.get('locality', '').lower() in match_key.lower()
+                    ):
+                        prop['latitude'] = coord_data['latitude']
+                        prop['longitude'] = coord_data['longitude']
+                        prop['coordinates'] = f"{coord_data['latitude']},{coord_data['longitude']}"
+                        matched_count += 1
+                        coordinate_found = True
+                        break
+                
+                if coordinate_found:
+                    break
+            
+            # Fallback a geocodificación por barrio si no se encontró
+            if not coordinate_found:
+                neighborhood = prop.get('neighborhood', '')
+                if neighborhood:
+                    fallback_coords = self._geocode_address('', neighborhood)
+                    prop.update(fallback_coords)
+        
+        self.logger.info(f"🎯 Coordenadas asignadas: {matched_count}/{len(properties)} propiedades")
+        return properties
+    
+    def scrape_ultra_fast(self, total_pages: int, output_name: str = "properati_ultra_fast", 
+                         save_every: int = 25) -> List[Dict[str, Any]]:
+        """
+        Método ULTRA RÁPIDO para scraping masivo usando JSON-LD
+        Elimina navegación individual a páginas de detalle
+        """
+        print(f"⚡ SCRAPING ULTRA RÁPIDO - JSON-LD MODE")
+        print(f"📊 Objetivo: ~{total_pages * 30:,} propiedades")
+        print(f"🚀 Velocidad estimada: <0.5s por propiedad")
+        print(f"💾 Guardar cada: {save_every} páginas")
+        print("=" * 60)
+        
+        start_time = time.time()
+        all_data = []
+        failed_pages = []
+        
+        with SB(uc=True, headless=self.headless, incognito=self.incognito) as sb:
+            for page_num in range(1, total_pages + 1):
+                page_start_time = time.time()
+                
+                try:
+                    # Navegar a la página
+                    if not self._navigate_to_page(sb, page_num):
+                        self.logger.error(f"❌ Error navegando a página {page_num}")
+                        failed_pages.append(page_num)
+                        continue
+                    
+                    # Extraer propiedades básicas (SIN coordenadas exactas)
+                    page_properties = self._extract_page_properties(sb, page_num, 30, False)
+                    
+                    if not page_properties:
+                        self.logger.warning(f"⚠️  Página {page_num}: Sin propiedades")
+                        continue
+                    
+                    # Extraer coordenadas desde JSON-LD (ULTRA RÁPIDO)
+                    coordinates_map = self._extract_coordinates_from_jsonld(sb)
+                    
+                    # Si JSON-LD no funcionó, usar método alternativo rápido
+                    if not coordinates_map:
+                        coordinates_map = self._extract_coordinates_from_scripts_fast(sb)
+                    
+                    # Asignar coordenadas a propiedades
+                    processed_properties = self._match_property_coordinates(page_properties, coordinates_map)
+                    
+                    all_data.extend(processed_properties)
+                    
+                    # Calcular velocidad
+                    page_time = time.time() - page_start_time
+                    props_per_second = len(processed_properties) / page_time if page_time > 0 else 0
+                    
+                    self.logger.info(f"⚡ Página {page_num}/{total_pages}: {len(processed_properties)} propiedades "
+                                   f"({page_time:.1f}s, {props_per_second:.1f} props/s)")
+                    
+                    # Guardar progreso
+                    if page_num % save_every == 0 or page_num == total_pages:
+                        self._save_progress(all_data, output_name, page_num, total_pages)
+                        
+                        # Estadísticas
+                        elapsed_time = time.time() - start_time
+                        total_props = len(all_data)
+                        avg_time_per_prop = elapsed_time / total_props if total_props > 0 else 0
+                        
+                        print(f"\n⚡ ESTADÍSTICAS ULTRA RÁPIDAS (Página {page_num}):")
+                        print(f"   ⏱️  Tiempo transcurrido: {elapsed_time/3600:.2f} horas")
+                        print(f"   📊 Propiedades procesadas: {total_props:,}")
+                        print(f"   🚀 Velocidad promedio: {avg_time_per_prop:.3f}s/propiedad")
+                        
+                        # Estimación
+                        if page_num < total_pages:
+                            remaining_pages = total_pages - page_num
+                            estimated_time = (elapsed_time / page_num) * remaining_pages
+                            print(f"   ⏳ Tiempo estimado restante: {estimated_time/3600:.2f} horas")
+                        print()
+                    
+                    # Delay mínimo
+                    if page_num < total_pages:
+                        time.sleep(0.5)  # Delay ultra reducido
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ Error procesando página {page_num}: {e}")
+                    failed_pages.append(page_num)
+        
+        # Estadísticas finales
+        total_time = time.time() - start_time
+        self._print_ultra_fast_stats(all_data, total_time, failed_pages)
+        
+        return all_data
+    
+    def _print_ultra_fast_stats(self, data: List[Dict], total_time: float, failed_pages: List[int]):
+        """Imprime estadísticas del scraping ultra rápido"""
+        total_props = len(data)
+        props_per_second = total_props / total_time if total_time > 0 else 0
+        
+        print(f"\n⚡ SCRAPING ULTRA RÁPIDO COMPLETADO!")
+        print("=" * 60)
+        print(f"📊 Propiedades extraídas: {total_props:,}")
+        print(f"⏱️  Tiempo total: {total_time/3600:.2f} horas ({total_time/60:.1f} minutos)")
+        print(f"🚀 Velocidad promedio: {props_per_second:.2f} props/s ({3600/props_per_second:.2f}s/prop)")
+        print(f"❌ Páginas fallidas: {len(failed_pages)}")
+        
+        # Análisis de coordenadas
+        props_with_coords = sum(1 for prop in data if prop.get('latitude'))
+        coord_success_rate = props_with_coords / total_props if total_props > 0 else 0
+        print(f"🎯 Propiedades con coordenadas: {props_with_coords:,} ({coord_success_rate*100:.1f}%)")
+        
+        # Proyección para 68k
+        if total_props > 0:
+            time_per_prop = total_time / total_props
+            time_68k = 68000 * time_per_prop
+            print(f"\n🎯 PROYECCIÓN PARA 68K PROPIEDADES:")
+            print(f"   ⏱️  Tiempo estimado: {time_68k/3600:.1f} horas ({time_68k/3600/24:.1f} días)")
+    
     def scrape_large_dataset(self, total_pages: int, output_name: str = "properati_large", 
                            batch_size: int = 50, save_every: int = 10, 
                            extract_exact_coordinates: bool = True) -> List[Dict[str, Any]]:
@@ -1473,6 +1800,7 @@ def main():
     parser.add_argument("--save-every", type=int, default=0, help="Save progress every N pages (0 = save only at end)")
     parser.add_argument("--large-dataset", action="store_true", help="Modo optimizado para datasets grandes (68k+ propiedades)")
     parser.add_argument("--batch-size", type=int, default=50, help="Tamaño de lote para procesamiento optimizado (default: 50)")
+    parser.add_argument("--ultra-fast", action="store_true", help="Modo ULTRA RÁPIDO usando JSON-LD (sin navegación individual)")
     
     args = parser.parse_args()
     
@@ -1502,7 +1830,15 @@ def main():
         # Ejecutar scraping
         output_name = args.resume if args.resume else args.output
         
-        if args.large_dataset:
+        if args.ultra_fast:
+            # Usar método ULTRA RÁPIDO
+            print("⚡ MODO ULTRA RÁPIDO ACTIVADO")
+            data = scraper.scrape_ultra_fast(
+                total_pages=args.pages,
+                output_name=output_name,
+                save_every=max(1, args.save_every) if args.save_every > 0 else 25  # Default save every 25 pages
+            )
+        elif args.large_dataset:
             # Usar método optimizado para datasets grandes
             print("🚀 MODO DATASET GRANDE ACTIVADO")
             data = scraper.scrape_large_dataset(
