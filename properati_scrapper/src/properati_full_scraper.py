@@ -6,6 +6,7 @@ import re
 import time
 import argparse
 import glob
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -13,6 +14,9 @@ import logging
 
 # SeleniumBase imports
 from seleniumbase import SB
+
+# Local imports
+from config import RAW_DATA_DIR
 
 
 class ProperatiFullScraper:
@@ -37,6 +41,12 @@ class ProperatiFullScraper:
         self.last_saved_count = 0  # Track how many properties have been saved
         self.coordinate_cache = {}  # Cache para coordenadas por URL
         self.failed_coordinates = set()  # URLs que fallaron para evitar reintentos
+        
+        # Directory paths
+        self.raw_data_dir = RAW_DATA_DIR
+        
+        # Ensure data directories exist
+        self.raw_data_dir.mkdir(parents=True, exist_ok=True)
         
         # Configurar logging
         logging.basicConfig(
@@ -174,8 +184,8 @@ class ProperatiFullScraper:
         """
         try:
             if page_number == 1:
-                # Para la primera página, usar la URL base
-                url = "https://www.properati.com.ar/s/capital-federal/venta"
+                # Para la primera página, usar la URL base con filtro de tipo de propiedad
+                url = "https://www.properati.com.ar/s/capital-federal/venta?propertyType=apartment%2Chouse"
                 self.logger.info(f"🌐 Navegando con CDP Mode a página 1: {url}")
                 
                 # Activar CDP Mode para bypass automático de detección
@@ -248,7 +258,7 @@ class ProperatiFullScraper:
                 if not pagination_success:
                     self.logger.warning(f"⚠️  No se pudo navegar usando botones. Usando navegación directa como fallback...")
                     try:
-                        page_url = f"https://www.properati.com.ar/s/capital-federal/venta/{page_number}"
+                        page_url = f"https://www.properati.com.ar/s/capital-federal/venta/{page_number}?propertyType=apartment%2Chouse"
                         self.logger.info(f"🌐 Navegando directamente a página {page_number}: {page_url}")
                         sb.get(page_url)
                         time.sleep(4)
@@ -1227,19 +1237,18 @@ class ProperatiFullScraper:
                             var lat = parseFloat(obj.geo.latitude);
                             var lng = parseFloat(obj.geo.longitude);
                             
-                            if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
-                                var key = 'property_' + coordIndex;
-                                if (obj.name) key = obj.name.substring(0, 50);
-                                else if (obj.address && obj.address.streetAddress) key = obj.address.streetAddress.substring(0, 50);
-                                
-                                coordinatesMap[key] = {
-                                    latitude: lat,
-                                    longitude: lng,
-                                    name: obj.name || '',
-                                    locality: obj.address ? obj.address.addressLocality : ''
-                                };
-                                coordIndex++;
-                            }
+                        if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
+                            // Use unique key with coordinates to avoid duplicates
+                            var key = 'coord_' + coordIndex + '_' + lat.toFixed(6) + '_' + lng.toFixed(6);
+                            
+                            coordinatesMap[key] = {
+                                latitude: lat,
+                                longitude: lng,
+                                name: obj.name || '',
+                                locality: obj.address ? obj.address.addressLocality : ''
+                            };
+                            coordIndex++;
+                        }
                         }
                         
                         // Buscar en arrays
@@ -1259,23 +1268,34 @@ class ProperatiFullScraper:
                 findCoordinates(data, 0);
                 
             } catch (e) {
-                // Si falla JSON, buscar patrones de coordenadas en el texto
-                var coordPattern = /"latitude":\s*"?(-34\.[0-9]+)"?[^}]*"longitude":\s*"?(-58\.[0-9]+)"?/g;
-                var match;
-                while ((match = coordPattern.exec(content)) !== null) {
-                    var lat = parseFloat(match[1]);
-                    var lng = parseFloat(match[2]);
-                    
-                    if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
-                        coordinatesMap['script_coord_' + coordIndex] = {
-                            latitude: lat,
-                            longitude: lng,
-                            name: '',
-                            locality: ''
-                        };
-                        coordIndex++;
+                // Si falla JSON, buscar múltiples patrones de coordenadas en el texto
+                var patterns = [
+                    /"latitude":\s*"?(-34\.[0-9]+)"?[^}]*"longitude":\s*"?(-58\.[0-9]+)"?/g,
+                    /"lat":\s*"?(-34\.[0-9]+)"?[^}]*"lng":\s*"?(-58\.[0-9]+)"?/g,
+                    /"lat":\s*"?(-34\.[0-9]+)"?[^}]*"lon":\s*"?(-58\.[0-9]+)"?/g,
+                    /latitude['":]?\s*['":]?\s*(-34\.[0-9]+)['":]?[^}]*longitude['":]?\s*['":]?\s*(-58\.[0-9]+)/g,
+                    /center.*?(-34\.[0-9]{4,})[^0-9-]*(-58\.[0-9]{4,})/g,
+                    /position.*?(-34\.[0-9]{4,})[^0-9-]*(-58\.[0-9]{4,})/g
+                ];
+                
+                patterns.forEach(function(pattern) {
+                    var match;
+                    while ((match = pattern.exec(content)) !== null) {
+                        var lat = parseFloat(match[1]);
+                        var lng = parseFloat(match[2]);
+                        
+                        if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
+                            var key = 'regex_' + coordIndex + '_' + lat.toFixed(6) + '_' + lng.toFixed(6);
+                            coordinatesMap[key] = {
+                                latitude: lat,
+                                longitude: lng,
+                                name: '',
+                                locality: ''
+                            };
+                            coordIndex++;
+                        }
                     }
-                }
+                });
             }
         });
         
@@ -1300,7 +1320,6 @@ class ProperatiFullScraper:
         // Extraer coordenadas desde scripts (método alternativo mejorado)
         var coordinatesMap = {};
         var coordIndex = 0;
-        var usedCoordinates = new Set(); // Evitar duplicados
         
         // Buscar en todos los scripts
         var scripts = document.querySelectorAll('script');
@@ -1318,17 +1337,11 @@ class ProperatiFullScraper:
                     
                     // Validar coordenadas de Buenos Aires
                     if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
-                        var coordKey = lat.toFixed(6) + ',' + lng.toFixed(6);
-                        
-                        // Evitar duplicados
-                        if (!usedCoordinates.has(coordKey)) {
-                            usedCoordinates.add(coordKey);
-                            coordinatesMap['script_prop_' + coordIndex] = {
-                                latitude: lat,
-                                longitude: lng
-                            };
-                            coordIndex++;
-                        }
+                        coordinatesMap['script_prop_' + coordIndex] = {
+                            latitude: lat,
+                            longitude: lng
+                        };
+                        coordIndex++;
                     }
                 }
                 
@@ -1359,15 +1372,11 @@ class ProperatiFullScraper:
                     // Emparejar coordenadas (máximo 30 por página)
                     var maxPairs = Math.min(latMatches.length, lngMatches.length, 30);
                     for (var i = 0; i < maxPairs; i++) {
-                        var coordKey = latMatches[i].toFixed(6) + ',' + lngMatches[i].toFixed(6);
-                        if (!usedCoordinates.has(coordKey)) {
-                            usedCoordinates.add(coordKey);
-                            coordinatesMap['script_prop_' + coordIndex] = {
-                                latitude: latMatches[i],
-                                longitude: lngMatches[i]
-                            };
-                            coordIndex++;
-                        }
+                        coordinatesMap['script_prop_' + coordIndex] = {
+                            latitude: latMatches[i],
+                            longitude: lngMatches[i]
+                        };
+                        coordIndex++;
                     }
                 }
             }
@@ -1389,63 +1398,155 @@ class ProperatiFullScraper:
             return {}
     
     def _match_property_coordinates(self, properties: List[Dict], coordinates_map: Dict) -> List[Dict]:
-        """Asigna coordenadas a propiedades usando coincidencia inteligente"""
-        matched_count = 0
+        """Asigna coordenadas a propiedades usando coincidencia inteligente (SIN RESTRICCIONES)"""
+        exact_matched_count = 0
+        geocoded_count = 0
         coordinates_list = list(coordinates_map.values())
         
         self.logger.info(f"🔍 Intentando asignar {len(coordinates_list)} coordenadas a {len(properties)} propiedades")
         
+        # Usar coordenadas exactas de forma inteligente (sin asignación aleatoria)
         for i, prop in enumerate(properties):
             coordinate_found = False
             
-            # Método 1: Asignación secuencial si tenemos suficientes coordenadas únicas
-            if len(coordinates_list) >= len(properties) and i < len(coordinates_list):
+            # Método 1: Asignación secuencial de coordenadas exactas disponibles
+            if i < len(coordinates_list):
                 coord_data = coordinates_list[i]
                 prop['latitude'] = coord_data['latitude']
                 prop['longitude'] = coord_data['longitude']
                 prop['coordinates'] = f"{coord_data['latitude']},{coord_data['longitude']}"
-                matched_count += 1
+                exact_matched_count += 1
                 coordinate_found = True
-                self.logger.debug(f"🎯 Asignación secuencial [{i+1}]: {prop['coordinates']}")
+                self.logger.debug(f"🎯 Coordenada exacta [{i+1}]: {prop['coordinates']}")
             
-            # Método 2: Búsqueda por coincidencia de texto (si el método 1 no funcionó)
-            if not coordinate_found:
+            # Método 2: Búsqueda por coincidencia de texto específica (solo para coordenadas no usadas)
+            if not coordinate_found and len(coordinates_list) < len(properties):
                 match_keys = [
                     prop.get('title', ''),
                     prop.get('location', ''),
-                    prop.get('neighborhood', ''),
-                    prop.get('full_address', '')
+                    prop.get('full_address', '')  # Removed neighborhood to avoid generic matches
                 ]
                 
+                # Only try text matching if we have specific property details
                 for coord_key, coord_data in coordinates_map.items():
+                    # Skip if this coordinate was already used in sequential assignment
+                    coord_str = f"{coord_data['latitude']},{coord_data['longitude']}"
+                    already_used = False
+                    for j in range(min(i, len(coordinates_list))):
+                        if coord_str == f"{coordinates_list[j]['latitude']},{coordinates_list[j]['longitude']}":
+                            already_used = True
+                            break
+                    
+                    if already_used:
+                        continue
+                    
                     for match_key in match_keys:
-                        if match_key and coord_key and (
+                        if match_key and coord_key and len(match_key) > 10 and (  # Only specific matches
                             match_key.lower() in coord_key.lower() or 
-                            coord_key.lower() in match_key.lower() or
-                            coord_data.get('locality', '').lower() in match_key.lower()
+                            coord_key.lower() in match_key.lower()
                         ):
                             prop['latitude'] = coord_data['latitude']
                             prop['longitude'] = coord_data['longitude']
-                            prop['coordinates'] = f"{coord_data['latitude']},{coord_data['longitude']}"
-                            matched_count += 1
+                            prop['coordinates'] = coord_str
+                            exact_matched_count += 1
                             coordinate_found = True
-                            self.logger.debug(f"🎯 Match por texto: {coord_key} -> {prop['coordinates']}")
+                            self.logger.debug(f"🎯 Match por texto específico: {coord_key} -> {prop['coordinates']}")
                             break
                     
                     if coordinate_found:
                         break
             
-            # Método 3: Fallback a geocodificación por barrio
+            # Método 3: Geocodificación por barrio (para propiedades sin coordenada exacta)
             if not coordinate_found:
                 neighborhood = prop.get('neighborhood', '')
                 if neighborhood:
                     fallback_coords = self._geocode_address('', neighborhood)
                     prop.update(fallback_coords)
                     if prop.get('latitude'):
+                        geocoded_count += 1
                         self.logger.debug(f"🏘️  Geocodificación: {neighborhood} -> {prop.get('coordinates', 'N/A')}")
         
-        self.logger.info(f"🎯 Coordenadas asignadas: {matched_count}/{len(properties)} propiedades con coordenadas exactas")
+        self.logger.info(f"🎯 Coordenadas exactas: {exact_matched_count}/{len(properties)} propiedades")
+        if geocoded_count > 0:
+            self.logger.info(f"🏘️  Coordenadas geocodificadas: {geocoded_count}/{len(properties)} propiedades")
+        total_with_coords = exact_matched_count + geocoded_count
+        self.logger.info(f"📍 Total con coordenadas: {total_with_coords}/{len(properties)} propiedades")
+        
         return properties
+    
+    def _geocode_address(self, full_address: str, neighborhood: str) -> Dict[str, Any]:
+        """Geocodifica una dirección usando coordenadas aproximadas de barrios de Buenos Aires"""
+        result = {
+            'latitude': None,
+            'longitude': None,
+            'coordinates': None
+        }
+        
+        # Diccionario de coordenadas aproximadas de barrios de Buenos Aires
+        neighborhood_coords = {
+            'agronomía': (-34.5899, -58.4945),
+            'almagro': (-34.6096, -58.4183),
+            'balvanera': (-34.6085, -58.3967),
+            'barracas': (-34.6392, -58.3671),
+            'belgrano': (-34.5625, -58.4577),
+            'boedo': (-34.6274, -58.4101),
+            'caballito': (-34.6184, -58.4398),
+            'chacarita': (-34.5876, -58.4515),
+            'coghlan': (-34.5542, -58.4751),
+            'colegiales': (-34.5746, -58.4478),
+            'constitución': (-34.6267, -58.3818),
+            'flores': (-34.6283, -58.4639),
+            'floresta': (-34.6335, -58.4847),
+            'la boca': (-34.6343, -58.3634),
+            'la paternal': (-34.6027, -58.4651),
+            'liniers': (-34.6418, -58.5209),
+            'mataderos': (-34.6565, -58.4965),
+            'montserrat': (-34.6118, -58.3738),
+            'nueva pompeya': (-34.6515, -58.4107),
+            'núñez': (-34.5443, -58.4636),
+            'palermo': (-34.5888, -58.4196),
+            'parque avellaneda': (-34.6418, -58.4765),
+            'parque chacabuco': (-34.6353, -58.4434),
+            'parque chas': (-34.5889, -58.4751),
+            'parque patricios': (-34.6364, -58.4001),
+            'puerto madero': (-34.6118, -58.3634),
+            'recoleta': (-34.5888, -58.3967),
+            'retiro': (-34.5934, -58.3738),
+            'saavedra': (-34.5542, -58.4847),
+            'san cristóbal': (-34.6227, -58.3967),
+            'san nicolás': (-34.6051, -58.3738),
+            'san telmo': (-34.6214, -58.3671),
+            'versalles': (-34.6418, -58.5209),
+            'villa crespo': (-34.5999, -58.4398),
+            'villa devoto': (-34.6027, -58.5097),
+            'villa general mitre': (-34.5876, -58.4639),
+            'villa lugano': (-34.6739, -58.4765),
+            'villa luro': (-34.6335, -58.5097),
+            'villa ortúzar': (-34.5746, -58.4639),
+            'villa pueyrredón': (-34.5625, -58.4847),
+            'villa real': (-34.6184, -58.5097),
+            'villa riachuelo': (-34.6739, -58.4434),
+            'villa santa rita': (-34.6184, -58.4847),
+            'villa soldati': (-34.6739, -58.4434),
+            'villa urquiza': (-34.5799, -58.4751),
+            'villa del parque': (-34.6096, -58.4847),
+        }
+        
+        # Normalizar nombre del barrio
+        if neighborhood:
+            neighborhood_key = neighborhood.lower().strip()
+            if neighborhood_key in neighborhood_coords:
+                lat, lng = neighborhood_coords[neighborhood_key]
+                # Agregar pequeña variación aleatoria para evitar coordenadas idénticas
+                import random
+                lat_offset = random.uniform(-0.005, 0.005)  # ~500m variation
+                lng_offset = random.uniform(-0.005, 0.005)
+                
+                result['latitude'] = round(lat + lat_offset, 6)
+                result['longitude'] = round(lng + lng_offset, 6)
+                result['coordinates'] = f"{result['latitude']},{result['longitude']}"
+        
+        return result
     
     def scrape_ultra_fast(self, total_pages: int, output_name: str = "properati_ultra_fast", 
                          save_every: int = 25, start_page: int = 1) -> List[Dict[str, Any]]:
@@ -1539,8 +1640,9 @@ class ProperatiFullScraper:
     def scrape_by_neighborhoods(self, output_name: str = "properati_by_neighborhoods", 
                                save_every_neighborhood: int = 5) -> List[Dict[str, Any]]:
         """
-        Método para scraping por barrios de Buenos Aires
+        Método para scraping por barrios de Buenos Aires (OPTIMIZADO PARA MEMORIA)
         Evita límites de páginas scrapeando cada barrio por separado
+        Usa archivos de progreso en lugar de mantener todo en memoria
         """
         # Lista de barrios de Buenos Aires con sus URLs de Properati
         neighborhoods = {
@@ -1598,9 +1700,10 @@ class ProperatiFullScraper:
         print("=" * 60)
         
         start_time = time.time()
-        all_data = []
+        progress_files = []  # Track progress files instead of keeping data in memory
         failed_neighborhoods = []
         neighborhood_stats = {}
+        total_properties = 0  # Track total count without storing all data
         
         with SB(uc=True, headless=self.headless, incognito=self.incognito) as sb:
             for idx, (neighborhood_name, neighborhood_slug) in enumerate(neighborhoods.items(), 1):
@@ -1613,9 +1716,13 @@ class ProperatiFullScraper:
                     neighborhood_data = self._scrape_neighborhood(sb, neighborhood_name, neighborhood_slug)
                     
                     if neighborhood_data:
-                        all_data.extend(neighborhood_data)
+                        # Guardar inmediatamente los datos del barrio para liberar memoria
+                        neighborhood_file = self._save_neighborhood_data(neighborhood_data, neighborhood_name, output_name, idx)
+                        progress_files.append(neighborhood_file)
+                        
                         neighborhood_time = time.time() - neighborhood_start_time
                         props_per_second = len(neighborhood_data) / neighborhood_time if neighborhood_time > 0 else 0
+                        total_properties += len(neighborhood_data)
                         
                         neighborhood_stats[neighborhood_name] = {
                             'properties': len(neighborhood_data),
@@ -1625,25 +1732,26 @@ class ProperatiFullScraper:
                         
                         print(f"✅ {neighborhood_name}: {len(neighborhood_data)} propiedades "
                               f"({neighborhood_time:.1f}s, {props_per_second:.1f} props/s)")
+                        
+                        # Liberar memoria inmediatamente
+                        del neighborhood_data
                     else:
                         failed_neighborhoods.append(neighborhood_name)
                         print(f"❌ {neighborhood_name}: Sin propiedades")
                     
-                    # Guardar progreso cada N barrios
+                    # Mostrar progreso cada N barrios (sin guardar archivo consolidado aún)
                     if idx % save_every_neighborhood == 0 or idx == len(neighborhoods):
-                        self._save_neighborhood_progress(all_data, output_name, idx, len(neighborhoods), neighborhood_stats)
-                        
                         # Mostrar estadísticas
                         elapsed_time = time.time() - start_time
-                        total_props = len(all_data)
-                        avg_time_per_prop = elapsed_time / total_props if total_props > 0 else 0
+                        avg_time_per_prop = elapsed_time / total_properties if total_properties > 0 else 0
                         
                         print(f"\n📈 PROGRESO ({idx} barrios procesados):")
                         print(f"   ⏱️  Tiempo transcurrido: {elapsed_time/3600:.2f} horas")
-                        print(f"   📊 Propiedades extraídas: {total_props:,}")
+                        print(f"   📊 Propiedades extraídas: {total_properties:,}")
                         print(f"   🚀 Velocidad promedio: {avg_time_per_prop:.3f}s/propiedad")
                         print(f"   🏘️  Barrios exitosos: {len(neighborhood_stats)}")
                         print(f"   ❌ Barrios fallidos: {len(failed_neighborhoods)}")
+                        print(f"   📁 Archivos de progreso: {len(progress_files)}")
                     
                     # Delay entre barrios
                     if idx < len(neighborhoods):
@@ -1653,11 +1761,122 @@ class ProperatiFullScraper:
                     self.logger.error(f"❌ Error procesando barrio {neighborhood_name}: {e}")
                     failed_neighborhoods.append(neighborhood_name)
         
+        # Consolidar archivos de progreso en archivo final
+        print(f"\n🔗 CONSOLIDANDO {len(progress_files)} archivos de progreso...")
+        final_data = self._join_progress_files(progress_files, output_name)
+        
         # Estadísticas finales
         total_time = time.time() - start_time
-        self._print_neighborhood_stats(all_data, total_time, failed_neighborhoods, neighborhood_stats)
+        self._print_neighborhood_stats_optimized(total_properties, total_time, failed_neighborhoods, neighborhood_stats)
+        
+        # Limpiar archivos temporales de barrios individuales
+        self._cleanup_neighborhood_files(progress_files)
+        
+        return final_data
+    
+    def _save_neighborhood_data(self, neighborhood_data: List[Dict], neighborhood_name: str, 
+                               output_name: str, neighborhood_idx: int) -> str:
+        """Guarda los datos de un barrio individual y retorna el path del archivo"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = neighborhood_name.lower().replace(' ', '_').replace('ñ', 'n')
+        filename = f"{output_name}_neighborhood_{safe_name}_{neighborhood_idx:02d}_{timestamp}"
+        
+        # Guardar solo JSON para eficiencia (se convertirá a CSV al final)
+        json_file = os.path.join(self.raw_data_dir, f"{filename}.json")
+        
+        with open(json_file, 'w', encoding='utf-8') as f:
+            json.dump(neighborhood_data, f, ensure_ascii=False, indent=2)
+        
+        self.logger.info(f"💾 Barrio {neighborhood_name}: {len(neighborhood_data)} propiedades → {json_file}")
+        return json_file
+    
+    def _join_progress_files(self, progress_files: List[str], output_name: str) -> List[Dict[str, Any]]:
+        """Consolida múltiples archivos de progreso en un archivo final"""
+        all_data = []
+        unique_ids = set()
+        duplicates_removed = 0
+        
+        print(f"🔗 Consolidando {len(progress_files)} archivos...")
+        
+        for file_path in progress_files:
+            if not os.path.exists(file_path):
+                self.logger.warning(f"⚠️  Archivo no encontrado: {file_path}")
+                continue
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_data = json.load(f)
+                
+                # Filtrar duplicados por property_id
+                for item in file_data:
+                    prop_id = item.get('property_id')
+                    if prop_id and prop_id not in unique_ids:
+                        unique_ids.add(prop_id)
+                        all_data.append(item)
+                    elif prop_id:
+                        duplicates_removed += 1
+                
+                print(f"✅ {os.path.basename(file_path)}: {len(file_data)} propiedades leídas")
+                
+            except Exception as e:
+                self.logger.error(f"❌ Error leyendo {file_path}: {e}")
+        
+        if duplicates_removed > 0:
+            print(f"🔍 Duplicados removidos: {duplicates_removed}")
+        
+        # Guardar archivo final consolidado
+        self.scraped_data = all_data
+        saved_files = self.save_data(output_name, "both", False)
+        
+        print(f"🎉 Archivo final consolidado:")
+        for format_type, filepath in saved_files.items():
+            print(f"   {format_type.upper()}: {filepath}")
         
         return all_data
+    
+    def _cleanup_neighborhood_files(self, progress_files: List[str]):
+        """Limpia archivos temporales de barrios individuales"""
+        cleaned = 0
+        for file_path in progress_files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    cleaned += 1
+            except Exception as e:
+                self.logger.warning(f"⚠️  No se pudo eliminar {file_path}: {e}")
+        
+        if cleaned > 0:
+            print(f"🧹 Archivos temporales limpiados: {cleaned}")
+    
+    def _print_neighborhood_stats_optimized(self, total_properties: int, total_time: float, 
+                                          failed_neighborhoods: List[str], neighborhood_stats: Dict):
+        """Imprime estadísticas finales optimizadas para memoria"""
+        print(f"\n🎉 SCRAPING POR BARRIOS COMPLETADO!")
+        print("=" * 60)
+        
+        # Estadísticas generales
+        hours = total_time / 3600
+        props_per_second = total_properties / total_time if total_time > 0 else 0
+        
+        print(f"⏱️  Tiempo total: {hours:.2f} horas ({total_time/60:.1f} minutos)")
+        print(f"📊 Total propiedades: {total_properties:,}")
+        print(f"🚀 Velocidad promedio: {props_per_second:.2f} propiedades/segundo")
+        print(f"🏘️  Barrios exitosos: {len(neighborhood_stats)}")
+        print(f"❌ Barrios fallidos: {len(failed_neighborhoods)}")
+        
+        if failed_neighborhoods:
+            print(f"\n❌ Barrios que fallaron:")
+            for neighborhood in failed_neighborhoods:
+                print(f"   - {neighborhood}")
+        
+        # Top 10 barrios por cantidad de propiedades
+        if neighborhood_stats:
+            sorted_neighborhoods = sorted(neighborhood_stats.items(), 
+                                        key=lambda x: x[1]['properties'], reverse=True)
+            print(f"\n🏆 TOP 10 BARRIOS (por propiedades):")
+            for i, (name, stats) in enumerate(sorted_neighborhoods[:10], 1):
+                print(f"   {i:2d}. {name}: {stats['properties']:,} propiedades "
+                      f"({stats['props_per_second']:.1f} props/s)")
     
     def _scrape_neighborhood(self, sb, neighborhood_name: str, neighborhood_slug: str) -> List[Dict[str, Any]]:
         """Scraping completo de un barrio específico"""
@@ -1667,11 +1886,11 @@ class ProperatiFullScraper:
         
         while page <= max_pages:
             try:
-                # Construir URL del barrio
+                # Construir URL del barrio con filtro de tipo de propiedad
                 if page == 1:
-                    url = f"https://www.properati.com.ar/s/capital-federal/{neighborhood_slug}/venta"
+                    url = f"https://www.properati.com.ar/s/capital-federal/{neighborhood_slug}/venta?propertyType=apartment%2Chouse"
                 else:
-                    url = f"https://www.properati.com.ar/s/capital-federal/{neighborhood_slug}/venta/{page}"
+                    url = f"https://www.properati.com.ar/s/capital-federal/{neighborhood_slug}/venta/{page}?propertyType=apartment%2Chouse"
                 
                 self.logger.debug(f"🌐 {neighborhood_name} página {page}: {url}")
                 sb.get(url)

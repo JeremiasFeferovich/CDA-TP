@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Configuración de URLs
 BASE_URL = "https://www.properati.com.ar"
-SEARCH_URL = "https://www.properati.com.ar/s/capital-federal/venta/{}"
+SEARCH_URL = "https://www.properati.com.ar/s/capital-federal/venta/{}?propertyType=apartment%2Chouse"
 
 # Configuración de directorios
 PROJECT_ROOT = Path(__file__).parent.parent
