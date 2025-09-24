@@ -35,6 +35,8 @@ class ProperatiFullScraper:
         self.delay = delay
         self.scraped_data = []
         self.last_saved_count = 0  # Track how many properties have been saved
+        self.coordinate_cache = {}  # Cache para coordenadas por URL
+        self.failed_coordinates = set()  # URLs que fallaron para evitar reintentos
         
         # Configurar logging
         logging.basicConfig(
@@ -88,7 +90,8 @@ class ProperatiFullScraper:
     
     def scrape_multiple_pages(self, start_page: int = 1, max_pages: int = 5, 
                             properties_per_page: int = 30, save_every: int = 0, 
-                            output_name: str = "properati_full", output_format: str = "both") -> List[Dict[str, Any]]:
+                            output_name: str = "properati_full", output_format: str = "both",
+                            extract_exact_coordinates: bool = False) -> List[Dict[str, Any]]:
         """
         Scraper principal para múltiples páginas
         
@@ -119,7 +122,7 @@ class ProperatiFullScraper:
                         continue
                     
                     # Extraer propiedades
-                    page_properties = self._extract_page_properties(sb, page_num, properties_per_page)
+                    page_properties = self._extract_page_properties(sb, page_num, properties_per_page, extract_exact_coordinates)
                     
                     if page_properties:
                         self.scraped_data.extend(page_properties)
@@ -229,7 +232,7 @@ class ProperatiFullScraper:
             self.logger.error(f"❌ Error navegando a página {page_number}: {e}")
             return False
     
-    def _extract_page_properties(self, sb, page_number: int, max_properties: int) -> List[Dict[str, Any]]:
+    def _extract_page_properties(self, sb, page_number: int, max_properties: int, extract_exact_coordinates: bool = False) -> List[Dict[str, Any]]:
         """
         Extrae propiedades de la página actual usando JavaScript + Regex
         
@@ -320,6 +323,27 @@ class ProperatiFullScraper:
                 // Extraer texto completo para análisis posterior
                 property.full_text = snippet.textContent.trim();
                 
+                // Buscar coordenadas en scripts de la página
+                property.coordinates_found = [];
+                var scripts = document.querySelectorAll('script');
+                scripts.forEach(function(script) {
+                    var content = script.textContent || script.innerHTML;
+                    if (content) {
+                        // Buscar coordenadas de Buenos Aires (aproximadamente -34, -58)
+                        var coordPatterns = [
+                            /-34\.\d+/g,  // Latitud Buenos Aires
+                            /-58\.\d+/g   // Longitud Buenos Aires
+                        ];
+                        
+                        coordPatterns.forEach(function(pattern) {
+                            var matches = content.match(pattern);
+                            if (matches) {
+                                property.coordinates_found.push(...matches.slice(0, 2));
+                            }
+                        });
+                    }
+                });
+                
                 properties.push(property);
             });
             
@@ -384,7 +408,12 @@ class ProperatiFullScraper:
                     
                     # Photo and labels
                     'photo_count': 0,
-                    'labels': []
+                    'labels': [],
+                    
+                    # Coordinates
+                    'latitude': None,
+                    'longitude': None,
+                    'coordinates': None
                 }
                 
                 # Procesar título
@@ -451,6 +480,25 @@ class ProperatiFullScraper:
                 # Extraer información adicional del texto completo
                 additional_info = self._extract_additional_info(full_text)
                 property_data.update(additional_info)
+                
+                # Extraer coordenadas
+                if extract_exact_coordinates:
+                    # Extraer coordenadas exactas de la página de detalle
+                    detail_url = js_prop.get('detail_url', '')
+                    if detail_url:
+                        coordinate_info = self._extract_exact_coordinates(sb, detail_url, property_data.get('property_id', ''))
+                    else:
+                        # Fallback a geocodificación por barrio
+                        neighborhood = property_data.get('neighborhood', '')
+                        full_address = property_data.get('full_address', '')
+                        coordinate_info = self._geocode_address(full_address, neighborhood)
+                else:
+                    # Usar geocodificación rápida por barrio
+                    neighborhood = property_data.get('neighborhood', '')
+                    full_address = property_data.get('full_address', '')
+                    coordinate_info = self._geocode_address(full_address, neighborhood)
+                
+                property_data.update(coordinate_info)
                 
                 # URL de detalle
                 detail_url = js_prop.get('detail_url', '')
@@ -784,6 +832,471 @@ class ProperatiFullScraper:
         
         return result
     
+    def _extract_coordinates(self, coordinates_data: List[str]) -> Dict[str, Any]:
+        """Extrae coordenadas de latitud y longitud"""
+        result = {
+            'latitude': None,
+            'longitude': None,
+            'coordinates': None
+        }
+        
+        if not coordinates_data:
+            return result
+        
+        # Buscar latitud y longitud en los datos
+        latitude = None
+        longitude = None
+        
+        # Filtrar coordenadas para evitar duplicados globales
+        unique_coords = list(set(coordinates_data))
+        
+        for coord in unique_coords:
+            try:
+                coord_float = float(coord)
+                
+                # Buenos Aires está aproximadamente en -34.6, -58.4
+                # Latitud: entre -35 y -34
+                # Longitud: entre -59 y -57
+                if -35.5 < coord_float < -33.5:  # Rango de latitud para Buenos Aires
+                    if latitude is None:  # Solo tomar la primera latitud válida
+                        latitude = coord_float
+                elif -59.5 < coord_float < -57.0:  # Rango de longitud para Buenos Aires
+                    if longitude is None:  # Solo tomar la primera longitud válida
+                        longitude = coord_float
+            except (ValueError, TypeError):
+                continue
+        
+        # Asignar coordenadas si se encontraron ambas
+        if latitude is not None and longitude is not None:
+            result['latitude'] = latitude
+            result['longitude'] = longitude
+            result['coordinates'] = f"{latitude},{longitude}"
+        
+        return result
+    
+    def _geocode_address(self, address: str, neighborhood: str) -> Dict[str, Any]:
+        """Geocodifica una dirección usando coordenadas aproximadas por barrio de Buenos Aires"""
+        result = {
+            'latitude': None,
+            'longitude': None,
+            'coordinates': None
+        }
+        
+        if not neighborhood:
+            return result
+        
+        # Coordenadas aproximadas de barrios de Buenos Aires
+        # Estas son coordenadas reales de los centros de cada barrio
+        neighborhood_coords = {
+            'puerto madero': (-34.6118, -58.3691),
+            'belgrano': (-34.5627, -58.4583),
+            'palermo': (-34.5889, -58.4196),
+            'recoleta': (-34.5875, -58.3974),
+            'san telmo': (-34.6214, -58.3731),
+            'la boca': (-34.6345, -58.3617),
+            'barracas': (-34.6484, -58.3692),
+            'san nicolas': (-34.6037, -58.3816),
+            'monserrat': (-34.6132, -58.3782),
+            'retiro': (-34.5935, -58.3747),
+            'balvanera': (-34.6092, -58.3998),
+            'centro': (-34.6037, -58.3816),
+            'microcentro': (-34.6037, -58.3816),
+            'flores': (-34.6323, -58.4676),
+            'caballito': (-34.6198, -58.4370),
+            'villa crespo': (-34.5998, -58.4370),
+            'almagro': (-34.6132, -58.4198),
+            'boedo': (-34.6323, -58.4198),
+            'san cristobal': (-34.6198, -58.3998),
+            'barrio norte': (-34.5875, -58.3974),
+            'once': (-34.6092, -58.3998),
+            'abasto': (-34.6092, -58.3998),
+            'congreso': (-34.6092, -58.3870),
+            'tribunales': (-34.6037, -58.3870),
+            'villa urquiza': (-34.5751, -58.4583),
+            'villa ortuzar': (-34.5751, -58.4583),
+            'coghlan': (-34.5627, -58.4583),
+            'nunez': (-34.5464, -58.4583),
+            'saavedra': (-34.5464, -58.4583),
+            'villa pueyrredon': (-34.5627, -58.4676),
+            'agronomia': (-34.5751, -58.4889),
+            'chacarita': (-34.5889, -58.4583),
+            'paternal': (-34.6037, -58.4583),
+            'villa general mitre': (-34.6037, -58.4583),
+            'villa santa rita': (-34.6323, -58.4676),
+            'floresta': (-34.6323, -58.4889),
+            'velez sarsfield': (-34.6323, -58.5089),
+            'liniers': (-34.6484, -58.5289),
+            'mataderos': (-34.6645, -58.5089),
+            'parque avellaneda': (-34.6484, -58.4889),
+            'nueva pompeya': (-34.6645, -58.4198),
+            'parque patricios': (-34.6484, -58.4198),
+            'constitucion': (-34.6276, -58.3817)
+        }
+        
+        # Buscar coordenadas por barrio
+        neighborhood_lower = neighborhood.lower().strip()
+        
+        # Buscar coincidencia exacta primero
+        if neighborhood_lower in neighborhood_coords:
+            lat, lng = neighborhood_coords[neighborhood_lower]
+            result['latitude'] = lat
+            result['longitude'] = lng
+            result['coordinates'] = f"{lat},{lng}"
+            return result
+        
+        # Buscar coincidencia parcial
+        for barrio, coords in neighborhood_coords.items():
+            if barrio in neighborhood_lower or neighborhood_lower in barrio:
+                lat, lng = coords
+                result['latitude'] = lat
+                result['longitude'] = lng
+                result['coordinates'] = f"{lat},{lng}"
+                return result
+        
+        return result
+    
+    def _extract_exact_coordinates(self, sb, detail_url: str, property_id: str) -> Dict[str, Any]:
+        """Extrae coordenadas exactas navegando a la página de detalle de la propiedad"""
+        result = {
+            'latitude': None,
+            'longitude': None,
+            'coordinates': None
+        }
+        
+        if not detail_url:
+            return result
+        
+        # Construir URL completa si es necesario
+        if not detail_url.startswith('http'):
+            detail_url = f"https://www.properati.com.ar{detail_url}"
+        
+        # Verificar cache primero
+        if detail_url in self.coordinate_cache:
+            self.logger.debug(f"📋 Cache hit para propiedad {property_id[:8]}")
+            return self.coordinate_cache[detail_url].copy()
+        
+        # Verificar si ya falló antes
+        if detail_url in self.failed_coordinates:
+            self.logger.debug(f"⚠️  Saltando propiedad {property_id[:8]} - falló anteriormente")
+            return result
+        
+        try:
+            self.logger.info(f"🗺️  Extrayendo coordenadas exactas para propiedad {property_id[:8]}...")
+            
+            # Navegar a la página de detalle
+            sb.get(detail_url)
+            
+            # Esperar a que cargue la página (reducido)
+            try:
+                sb.wait_for_element_visible('.location-map-wrapper', timeout=3)
+            except:
+                # Intentar extraer coordenadas sin esperar al mapa
+                pass
+            
+            # Scroll hacia el mapa para asegurar que esté visible (optimizado)
+            sb.execute_script("document.querySelector('.location-map-wrapper')?.scrollIntoView();")
+            time.sleep(0.5)
+            
+            # Intentar hacer clic en "Ver en mapa" si está disponible
+            try:
+                # Buscar el botón "Ver en mapa" y hacer clic
+                map_button_selectors = [
+                    '#view-map-button',
+                    '.location-map__view-button',
+                    '[class*="view-map"]',
+                    'button:contains("Ver en mapa")',
+                    'div:contains("Ver en mapa")'
+                ]
+                
+                button_clicked = False
+                for selector in map_button_selectors:
+                    try:
+                        if sb.is_element_visible(selector):
+                            sb.js_click(selector)
+                            button_clicked = True
+                            self.logger.debug(f"✅ Botón mapa clickeado: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if button_clicked:
+                    time.sleep(1)  # Esperar a que cargue el mapa (optimizado)
+            except Exception as e:
+                self.logger.debug(f"No se pudo hacer clic en botón mapa: {e}")
+            
+            # Extraer coordenadas usando JavaScript
+            coordinate_extraction_script = """
+            // Buscar coordenadas en la página de detalle
+            var coordinates = {lat: null, lng: null};
+            
+            // Método 1: Buscar en scripts
+            var scripts = document.querySelectorAll('script');
+            scripts.forEach(function(script) {
+                var content = script.textContent || script.innerHTML;
+                if (content) {
+                    // Buscar patrones de coordenadas específicas
+                    var latMatch = content.match(/-34\\.\\d{6,}/);
+                    var lngMatch = content.match(/-58\\.\\d{6,}/);
+                    
+                    if (latMatch && lngMatch) {
+                        coordinates.lat = parseFloat(latMatch[0]);
+                        coordinates.lng = parseFloat(lngMatch[0]);
+                        return;
+                    }
+                }
+            });
+            
+            // Método 2: Buscar en atributos data
+            var mapElements = document.querySelectorAll('[data-lat], [data-lng], [data-latitude], [data-longitude]');
+            mapElements.forEach(function(el) {
+                var lat = el.getAttribute('data-lat') || el.getAttribute('data-latitude');
+                var lng = el.getAttribute('data-lng') || el.getAttribute('data-longitude');
+                
+                if (lat && lng) {
+                    coordinates.lat = parseFloat(lat);
+                    coordinates.lng = parseFloat(lng);
+                }
+            });
+            
+            // Método 3: Buscar en variables globales
+            if (window.propertyCoordinates) {
+                coordinates = window.propertyCoordinates;
+            } else if (window.mapData) {
+                if (window.mapData.lat) coordinates.lat = window.mapData.lat;
+                if (window.mapData.lng) coordinates.lng = window.mapData.lng;
+            }
+            
+            // Método 4: Buscar en el texto de la página patrones específicos
+            var pageText = document.documentElement.textContent;
+            var coordMatches = pageText.match(/-34\\.\\d{6,}\\s*,\\s*-58\\.\\d{6,}/);
+            if (coordMatches) {
+                var coords = coordMatches[0].split(',');
+                coordinates.lat = parseFloat(coords[0].trim());
+                coordinates.lng = parseFloat(coords[1].trim());
+            }
+            
+            return coordinates;
+            """
+            
+            # Ejecutar script de extracción
+            js_result = sb.execute_script(coordinate_extraction_script)
+            
+            if js_result and js_result.get('lat') and js_result.get('lng'):
+                lat = float(js_result['lat'])
+                lng = float(js_result['lng'])
+                
+                # Validar que las coordenadas están en Buenos Aires
+                if -35.5 < lat < -33.5 and -59.5 < lng < -57.0:
+                    result['latitude'] = lat
+                    result['longitude'] = lng
+                    result['coordinates'] = f"{lat},{lng}"
+                    self.logger.info(f"✅ Coordenadas exactas extraídas: {lat:.6f},{lng:.6f}")
+                    
+                    # Guardar en cache
+                    self.coordinate_cache[detail_url] = result.copy()
+                else:
+                    self.logger.warning(f"⚠️  Coordenadas fuera de rango Buenos Aires: {lat},{lng}")
+                    self.failed_coordinates.add(detail_url)
+            else:
+                self.logger.warning(f"⚠️  No se encontraron coordenadas para propiedad {property_id[:8]}")
+                self.failed_coordinates.add(detail_url)
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error extrayendo coordenadas exactas para {property_id[:8]}: {e}")
+            self.failed_coordinates.add(detail_url)
+        
+        return result
+    
+    def _extract_coordinates_batch(self, sb, properties_batch: List[Dict], extract_exact_coordinates: bool = False) -> List[Dict]:
+        """Procesa un lote de propiedades optimizando la extracción de coordenadas"""
+        if not extract_exact_coordinates:
+            # Usar geocodificación rápida para todo el lote
+            for prop in properties_batch:
+                neighborhood = prop.get('neighborhood', '')
+                full_address = prop.get('full_address', '')
+                coordinate_info = self._geocode_address(full_address, neighborhood)
+                prop.update(coordinate_info)
+            return properties_batch
+        
+        # Para coordenadas exactas, procesar con optimizaciones
+        processed_batch = []
+        
+        for prop in properties_batch:
+            detail_url = prop.get('detail_url', '')
+            property_id = prop.get('property_id', '')
+            
+            if detail_url:
+                # Usar método optimizado con cache
+                coordinate_info = self._extract_exact_coordinates(sb, detail_url, property_id)
+                prop.update(coordinate_info)
+                
+                # Si no se encontraron coordenadas exactas, usar fallback
+                if not coordinate_info.get('latitude'):
+                    neighborhood = prop.get('neighborhood', '')
+                    full_address = prop.get('full_address', '')
+                    fallback_coords = self._geocode_address(full_address, neighborhood)
+                    prop.update(fallback_coords)
+            else:
+                # Sin URL, usar geocodificación
+                neighborhood = prop.get('neighborhood', '')
+                full_address = prop.get('full_address', '')
+                coordinate_info = self._geocode_address(full_address, neighborhood)
+                prop.update(coordinate_info)
+            
+            processed_batch.append(prop)
+        
+        return processed_batch
+    
+    def scrape_large_dataset(self, total_pages: int, output_name: str = "properati_large", 
+                           batch_size: int = 50, save_every: int = 10, 
+                           extract_exact_coordinates: bool = True) -> List[Dict[str, Any]]:
+        """
+        Método optimizado para scraping de datasets grandes (68k+ propiedades)
+        
+        Args:
+            total_pages: Total de páginas a procesar
+            output_name: Nombre base del archivo
+            batch_size: Propiedades por lote de procesamiento
+            save_every: Guardar cada N páginas
+            extract_exact_coordinates: Si extraer coordenadas exactas
+        """
+        print(f"🚀 SCRAPING MASIVO OPTIMIZADO")
+        print(f"📊 Objetivo: ~{total_pages * 30:,} propiedades")
+        print(f"🎯 Coordenadas exactas: {'✅ SÍ' if extract_exact_coordinates else '❌ NO'}")
+        print(f"📦 Tamaño de lote: {batch_size}")
+        print(f"💾 Guardar cada: {save_every} páginas")
+        print("=" * 60)
+        
+        start_time = time.time()
+        all_data = []
+        failed_pages = []
+        
+        # Estadísticas de rendimiento
+        coord_cache_hits = 0
+        coord_extractions = 0
+        
+        with SB(uc=True, headless=self.headless, incognito=self.incognito) as sb:
+            for page_num in range(1, total_pages + 1):
+                page_start_time = time.time()
+                
+                try:
+                    # Navegar a la página
+                    if not self._navigate_to_page(sb, page_num):
+                        self.logger.error(f"❌ Error navegando a página {page_num}")
+                        failed_pages.append(page_num)
+                        continue
+                    
+                    # Extraer propiedades básicas
+                    page_properties = self._extract_page_properties(sb, page_num, 30, False)  # Sin coordenadas exactas inicialmente
+                    
+                    if not page_properties:
+                        self.logger.warning(f"⚠️  Página {page_num}: Sin propiedades")
+                        continue
+                    
+                    # Procesar en lotes para coordenadas
+                    processed_properties = []
+                    for i in range(0, len(page_properties), batch_size):
+                        batch = page_properties[i:i+batch_size]
+                        
+                        # Contar cache hits antes del procesamiento
+                        cache_hits_before = len([url for url in [prop.get('detail_url', '') for prop in batch] 
+                                               if url in self.coordinate_cache])
+                        
+                        processed_batch = self._extract_coordinates_batch(sb, batch, extract_exact_coordinates)
+                        processed_properties.extend(processed_batch)
+                        
+                        # Actualizar estadísticas
+                        coord_cache_hits += cache_hits_before
+                        coord_extractions += len(batch) - cache_hits_before
+                        
+                        # Mostrar progreso del lote
+                        self.logger.info(f"📦 Lote {i//batch_size + 1}: {len(batch)} propiedades procesadas")
+                    
+                    all_data.extend(processed_properties)
+                    
+                    # Calcular tiempo y velocidad
+                    page_time = time.time() - page_start_time
+                    props_per_second = len(processed_properties) / page_time if page_time > 0 else 0
+                    
+                    self.logger.info(f"✅ Página {page_num}/{total_pages}: {len(processed_properties)} propiedades "
+                                   f"({page_time:.1f}s, {props_per_second:.1f} props/s)")
+                    
+                    # Guardar progreso
+                    if page_num % save_every == 0 or page_num == total_pages:
+                        self._save_progress(all_data, output_name, page_num, total_pages)
+                        
+                        # Mostrar estadísticas de rendimiento
+                        elapsed_time = time.time() - start_time
+                        total_props = len(all_data)
+                        avg_time_per_prop = elapsed_time / total_props if total_props > 0 else 0
+                        cache_hit_rate = coord_cache_hits / (coord_cache_hits + coord_extractions) if (coord_cache_hits + coord_extractions) > 0 else 0
+                        
+                        print(f"\n📈 ESTADÍSTICAS DE RENDIMIENTO (Página {page_num}):")
+                        print(f"   ⏱️  Tiempo transcurrido: {elapsed_time/3600:.1f} horas")
+                        print(f"   📊 Propiedades procesadas: {total_props:,}")
+                        print(f"   🚀 Velocidad promedio: {avg_time_per_prop:.2f}s/propiedad")
+                        print(f"   📋 Cache hits: {coord_cache_hits:,} ({cache_hit_rate*100:.1f}%)")
+                        print(f"   🗺️  Extracciones nuevas: {coord_extractions:,}")
+                        
+                        # Estimación de tiempo restante
+                        if page_num < total_pages:
+                            remaining_pages = total_pages - page_num
+                            estimated_time = (elapsed_time / page_num) * remaining_pages
+                            print(f"   ⏳ Tiempo estimado restante: {estimated_time/3600:.1f} horas")
+                        print()
+                    
+                    # Delay optimizado entre páginas
+                    if page_num < total_pages:
+                        optimized_delay = max(0.5, self.delay * 0.3)  # Delay reducido
+                        time.sleep(optimized_delay)
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ Error procesando página {page_num}: {e}")
+                    failed_pages.append(page_num)
+        
+        # Estadísticas finales
+        total_time = time.time() - start_time
+        self._print_final_stats(all_data, total_time, failed_pages, coord_cache_hits, coord_extractions)
+        
+        return all_data
+    
+    def _save_progress(self, data: List[Dict], output_name: str, current_page: int, total_pages: int):
+        """Guarda el progreso durante el scraping masivo"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        progress_filename = f"{output_name}_progress_p{current_page}of{total_pages}_{timestamp}"
+        
+        # Guardar datos
+        self.scraped_data = data  # Temporalmente asignar para usar save_data
+        saved_files = self.save_data(progress_filename, "both", False)
+        
+        self.logger.info(f"💾 Progreso guardado: {len(data):,} propiedades")
+        for format_type, filepath in saved_files.items():
+            self.logger.info(f"   {format_type.upper()}: {filepath}")
+    
+    def _print_final_stats(self, data: List[Dict], total_time: float, failed_pages: List[int], 
+                          cache_hits: int, extractions: int):
+        """Imprime estadísticas finales del scraping masivo"""
+        total_props = len(data)
+        props_per_second = total_props / total_time if total_time > 0 else 0
+        cache_hit_rate = cache_hits / (cache_hits + extractions) if (cache_hits + extractions) > 0 else 0
+        
+        print(f"\n🎉 SCRAPING MASIVO COMPLETADO!")
+        print("=" * 60)
+        print(f"📊 Propiedades extraídas: {total_props:,}")
+        print(f"⏱️  Tiempo total: {total_time/3600:.2f} horas ({total_time/60:.1f} minutos)")
+        print(f"🚀 Velocidad promedio: {props_per_second:.2f} props/s ({3600/props_per_second:.1f}s/prop)")
+        print(f"📋 Cache hits: {cache_hits:,} ({cache_hit_rate*100:.1f}%)")
+        print(f"🗺️  Nuevas extracciones: {extractions:,}")
+        print(f"❌ Páginas fallidas: {len(failed_pages)}")
+        
+        if failed_pages:
+            print(f"   Páginas con errores: {failed_pages[:10]}{'...' if len(failed_pages) > 10 else ''}")
+        
+        # Análisis de coordenadas
+        props_with_coords = sum(1 for prop in data if prop.get('latitude'))
+        coord_success_rate = props_with_coords / total_props if total_props > 0 else 0
+        print(f"🎯 Propiedades con coordenadas: {props_with_coords:,} ({coord_success_rate*100:.1f}%)")
+    
     def save_data(self, filename: str = "properati_full_scraping", format: str = "both", append_mode: bool = False) -> Dict[str, str]:
         """
         Guarda los datos extraídos
@@ -955,8 +1468,11 @@ def main():
     parser.add_argument("--no-incognito", action="store_true", help="Desactivar modo incógnito")
     parser.add_argument("--delay", type=float, default=3.0, help="Delay entre páginas en segundos (default: 3.0)")
     parser.add_argument("--properties-per-page", type=int, default=30, help="Propiedades por página (default: 30)")
+    parser.add_argument("--exact-coords", action="store_true", help="Extraer coordenadas exactas navegando a cada propiedad (más lento)")
     parser.add_argument("--resume", type=str, help="Resume extraction by appending to existing file (provide base filename without timestamp)")
     parser.add_argument("--save-every", type=int, default=0, help="Save progress every N pages (0 = save only at end)")
+    parser.add_argument("--large-dataset", action="store_true", help="Modo optimizado para datasets grandes (68k+ propiedades)")
+    parser.add_argument("--batch-size", type=int, default=50, help="Tamaño de lote para procesamiento optimizado (default: 50)")
     
     args = parser.parse_args()
     
@@ -985,14 +1501,28 @@ def main():
         
         # Ejecutar scraping
         output_name = args.resume if args.resume else args.output
-        data = scraper.scrape_multiple_pages(
-            start_page=args.start_page,
-            max_pages=args.pages,
-            properties_per_page=args.properties_per_page,
-            save_every=args.save_every,
-            output_name=output_name,
-            output_format=args.format
-        )
+        
+        if args.large_dataset:
+            # Usar método optimizado para datasets grandes
+            print("🚀 MODO DATASET GRANDE ACTIVADO")
+            data = scraper.scrape_large_dataset(
+                total_pages=args.pages,
+                output_name=output_name,
+                batch_size=args.batch_size,
+                save_every=max(1, args.save_every) if args.save_every > 0 else 10,  # Default save every 10 pages
+                extract_exact_coordinates=args.exact_coords
+            )
+        else:
+            # Usar método estándar
+            data = scraper.scrape_multiple_pages(
+                start_page=args.start_page,
+                max_pages=args.pages,
+                properties_per_page=args.properties_per_page,
+                save_every=args.save_every,
+                output_name=output_name,
+                output_format=args.format,
+                extract_exact_coordinates=args.exact_coords
+            )
         
         # Guardar datos
         if data:
