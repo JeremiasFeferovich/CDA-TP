@@ -1202,42 +1202,80 @@ class ProperatiFullScraper:
     def _extract_coordinates_from_jsonld(self, sb) -> Dict[str, Dict[str, float]]:
         """Extrae coordenadas desde JSON-LD estructurado en la página de listado (ULTRA RÁPIDO)"""
         coordinate_extraction_script = """
-        // Extraer coordenadas desde JSON-LD estructurado
+        // Extraer coordenadas desde JSON-LD estructurado (mejorado)
         var coordinatesMap = {};
+        var coordIndex = 0;
         
         // Buscar scripts JSON-LD
         var jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
         
         jsonLdScripts.forEach(function(script) {
             try {
-                var data = JSON.parse(script.textContent);
+                var content = script.textContent.trim();
+                if (!content) return;
                 
-                // Manejar arrays de objetos
-                var items = Array.isArray(data) ? data : [data];
+                // Intentar parsear como JSON
+                var data = JSON.parse(content);
                 
-                items.forEach(function(item) {
-                    // Buscar coordenadas en geo.latitude/longitude
-                    if (item.geo && item.geo.latitude && item.geo.longitude) {
-                        var lat = parseFloat(item.geo.latitude);
-                        var lng = parseFloat(item.geo.longitude);
-                        
-                        // Validar coordenadas de Buenos Aires
-                        if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
-                            // Usar la dirección como clave única
-                            var key = item.address ? item.address.streetAddress : item.name;
-                            if (key) {
+                // Función recursiva para buscar coordenadas en cualquier parte del objeto
+                function findCoordinates(obj, depth) {
+                    if (depth > 10) return; // Evitar recursión infinita
+                    
+                    if (obj && typeof obj === 'object') {
+                        // Buscar coordenadas directas
+                        if (obj.geo && obj.geo.latitude && obj.geo.longitude) {
+                            var lat = parseFloat(obj.geo.latitude);
+                            var lng = parseFloat(obj.geo.longitude);
+                            
+                            if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
+                                var key = 'property_' + coordIndex;
+                                if (obj.name) key = obj.name.substring(0, 50);
+                                else if (obj.address && obj.address.streetAddress) key = obj.address.streetAddress.substring(0, 50);
+                                
                                 coordinatesMap[key] = {
                                     latitude: lat,
                                     longitude: lng,
-                                    name: item.name || '',
-                                    locality: item.address ? item.address.addressLocality : ''
+                                    name: obj.name || '',
+                                    locality: obj.address ? obj.address.addressLocality : ''
                                 };
+                                coordIndex++;
                             }
                         }
+                        
+                        // Buscar en arrays
+                        if (Array.isArray(obj)) {
+                            obj.forEach(function(item) {
+                                findCoordinates(item, depth + 1);
+                            });
+                        } else {
+                            // Buscar en propiedades del objeto
+                            Object.keys(obj).forEach(function(key) {
+                                findCoordinates(obj[key], depth + 1);
+                            });
+                        }
                     }
-                });
+                }
+                
+                findCoordinates(data, 0);
+                
             } catch (e) {
-                // Ignorar errores de parsing
+                // Si falla JSON, buscar patrones de coordenadas en el texto
+                var coordPattern = /"latitude":\s*"?(-34\.[0-9]+)"?[^}]*"longitude":\s*"?(-58\.[0-9]+)"?/g;
+                var match;
+                while ((match = coordPattern.exec(content)) !== null) {
+                    var lat = parseFloat(match[1]);
+                    var lng = parseFloat(match[2]);
+                    
+                    if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
+                        coordinatesMap['script_coord_' + coordIndex] = {
+                            latitude: lat,
+                            longitude: lng,
+                            name: '',
+                            locality: ''
+                        };
+                        coordIndex++;
+                    }
+                }
             }
         });
         
@@ -1259,47 +1297,78 @@ class ProperatiFullScraper:
     def _extract_coordinates_from_scripts_fast(self, sb) -> Dict[str, Dict[str, float]]:
         """Método alternativo rápido para extraer coordenadas desde scripts"""
         coordinate_extraction_script = """
-        // Extraer coordenadas desde scripts (método alternativo)
+        // Extraer coordenadas desde scripts (método alternativo mejorado)
         var coordinatesMap = {};
         var coordIndex = 0;
+        var usedCoordinates = new Set(); // Evitar duplicados
         
         // Buscar en todos los scripts
         var scripts = document.querySelectorAll('script');
         scripts.forEach(function(script) {
             var content = script.textContent || script.innerHTML;
             if (content && content.includes('latitude') && content.includes('longitude')) {
-                // Buscar patrones de coordenadas
-                var latPattern = /"latitude":\s*"?(-?\d+\.?\d*)"?/g;
-                var lngPattern = /"longitude":\s*"?(-?\d+\.?\d*)"?/g;
                 
-                var latMatches = [];
-                var lngMatches = [];
+                // Patrón mejorado para encontrar pares lat/lng juntos
+                var coordPairPattern = /"latitude":\s*"?(-34\.[0-9]+)"?[^}]{0,200}"longitude":\s*"?(-58\.[0-9]+)"?/g;
                 var match;
                 
-                // Extraer todas las latitudes
-                while ((match = latPattern.exec(content)) !== null) {
+                while ((match = coordPairPattern.exec(content)) !== null) {
                     var lat = parseFloat(match[1]);
-                    if (lat > -35.5 && lat < -33.5) {
-                        latMatches.push(lat);
+                    var lng = parseFloat(match[2]);
+                    
+                    // Validar coordenadas de Buenos Aires
+                    if (lat > -35.5 && lat < -33.5 && lng > -59.5 && lng < -57.0) {
+                        var coordKey = lat.toFixed(6) + ',' + lng.toFixed(6);
+                        
+                        // Evitar duplicados
+                        if (!usedCoordinates.has(coordKey)) {
+                            usedCoordinates.add(coordKey);
+                            coordinatesMap['script_prop_' + coordIndex] = {
+                                latitude: lat,
+                                longitude: lng
+                            };
+                            coordIndex++;
+                        }
                     }
                 }
                 
-                // Extraer todas las longitudes
-                while ((match = lngPattern.exec(content)) !== null) {
-                    var lng = parseFloat(match[1]);
-                    if (lng > -59.5 && lng < -57.0) {
-                        lngMatches.push(lng);
+                // Si no encontramos pares, buscar por separado pero con mejor lógica
+                if (coordIndex === 0) {
+                    var latPattern = /"latitude":\s*"?(-34\.[0-9]+)"?/g;
+                    var lngPattern = /"longitude":\s*"?(-58\.[0-9]+)"?/g;
+                    
+                    var latMatches = [];
+                    var lngMatches = [];
+                    
+                    // Extraer latitudes únicas
+                    while ((match = latPattern.exec(content)) !== null) {
+                        var lat = parseFloat(match[1]);
+                        if (lat > -35.5 && lat < -33.5 && !latMatches.includes(lat)) {
+                            latMatches.push(lat);
+                        }
                     }
-                }
-                
-                // Emparejar coordenadas
-                var minLength = Math.min(latMatches.length, lngMatches.length);
-                for (var i = 0; i < minLength; i++) {
-                    coordinatesMap['prop_' + coordIndex] = {
-                        latitude: latMatches[i],
-                        longitude: lngMatches[i]
-                    };
-                    coordIndex++;
+                    
+                    // Extraer longitudes únicas
+                    while ((match = lngPattern.exec(content)) !== null) {
+                        var lng = parseFloat(match[1]);
+                        if (lng > -59.5 && lng < -57.0 && !lngMatches.includes(lng)) {
+                            lngMatches.push(lng);
+                        }
+                    }
+                    
+                    // Emparejar coordenadas (máximo 30 por página)
+                    var maxPairs = Math.min(latMatches.length, lngMatches.length, 30);
+                    for (var i = 0; i < maxPairs; i++) {
+                        var coordKey = latMatches[i].toFixed(6) + ',' + lngMatches[i].toFixed(6);
+                        if (!usedCoordinates.has(coordKey)) {
+                            usedCoordinates.add(coordKey);
+                            coordinatesMap['script_prop_' + coordIndex] = {
+                                latitude: latMatches[i],
+                                longitude: lngMatches[i]
+                            };
+                            coordIndex++;
+                        }
+                    }
                 }
             }
         });
@@ -1320,46 +1389,62 @@ class ProperatiFullScraper:
             return {}
     
     def _match_property_coordinates(self, properties: List[Dict], coordinates_map: Dict) -> List[Dict]:
-        """Asigna coordenadas a propiedades usando coincidencia de texto"""
+        """Asigna coordenadas a propiedades usando coincidencia inteligente"""
         matched_count = 0
+        coordinates_list = list(coordinates_map.values())
         
-        for prop in properties:
-            # Intentar diferentes claves para hacer match
-            match_keys = [
-                prop.get('title', ''),
-                prop.get('location', ''),
-                prop.get('neighborhood', ''),
-                prop.get('full_address', '')
-            ]
-            
+        self.logger.info(f"🔍 Intentando asignar {len(coordinates_list)} coordenadas a {len(properties)} propiedades")
+        
+        for i, prop in enumerate(properties):
             coordinate_found = False
             
-            # Buscar coincidencias en el mapa de coordenadas
-            for coord_key, coord_data in coordinates_map.items():
-                for match_key in match_keys:
-                    if match_key and coord_key and (
-                        match_key.lower() in coord_key.lower() or 
-                        coord_key.lower() in match_key.lower() or
-                        coord_data.get('locality', '').lower() in match_key.lower()
-                    ):
-                        prop['latitude'] = coord_data['latitude']
-                        prop['longitude'] = coord_data['longitude']
-                        prop['coordinates'] = f"{coord_data['latitude']},{coord_data['longitude']}"
-                        matched_count += 1
-                        coordinate_found = True
-                        break
-                
-                if coordinate_found:
-                    break
+            # Método 1: Asignación secuencial si tenemos suficientes coordenadas únicas
+            if len(coordinates_list) >= len(properties) and i < len(coordinates_list):
+                coord_data = coordinates_list[i]
+                prop['latitude'] = coord_data['latitude']
+                prop['longitude'] = coord_data['longitude']
+                prop['coordinates'] = f"{coord_data['latitude']},{coord_data['longitude']}"
+                matched_count += 1
+                coordinate_found = True
+                self.logger.debug(f"🎯 Asignación secuencial [{i+1}]: {prop['coordinates']}")
             
-            # Fallback a geocodificación por barrio si no se encontró
+            # Método 2: Búsqueda por coincidencia de texto (si el método 1 no funcionó)
+            if not coordinate_found:
+                match_keys = [
+                    prop.get('title', ''),
+                    prop.get('location', ''),
+                    prop.get('neighborhood', ''),
+                    prop.get('full_address', '')
+                ]
+                
+                for coord_key, coord_data in coordinates_map.items():
+                    for match_key in match_keys:
+                        if match_key and coord_key and (
+                            match_key.lower() in coord_key.lower() or 
+                            coord_key.lower() in match_key.lower() or
+                            coord_data.get('locality', '').lower() in match_key.lower()
+                        ):
+                            prop['latitude'] = coord_data['latitude']
+                            prop['longitude'] = coord_data['longitude']
+                            prop['coordinates'] = f"{coord_data['latitude']},{coord_data['longitude']}"
+                            matched_count += 1
+                            coordinate_found = True
+                            self.logger.debug(f"🎯 Match por texto: {coord_key} -> {prop['coordinates']}")
+                            break
+                    
+                    if coordinate_found:
+                        break
+            
+            # Método 3: Fallback a geocodificación por barrio
             if not coordinate_found:
                 neighborhood = prop.get('neighborhood', '')
                 if neighborhood:
                     fallback_coords = self._geocode_address('', neighborhood)
                     prop.update(fallback_coords)
+                    if prop.get('latitude'):
+                        self.logger.debug(f"🏘️  Geocodificación: {neighborhood} -> {prop.get('coordinates', 'N/A')}")
         
-        self.logger.info(f"🎯 Coordenadas asignadas: {matched_count}/{len(properties)} propiedades")
+        self.logger.info(f"🎯 Coordenadas asignadas: {matched_count}/{len(properties)} propiedades con coordenadas exactas")
         return properties
     
     def scrape_ultra_fast(self, total_pages: int, output_name: str = "properati_ultra_fast", 
