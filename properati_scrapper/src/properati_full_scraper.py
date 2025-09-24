@@ -1448,13 +1448,14 @@ class ProperatiFullScraper:
         return properties
     
     def scrape_ultra_fast(self, total_pages: int, output_name: str = "properati_ultra_fast", 
-                         save_every: int = 25) -> List[Dict[str, Any]]:
+                         save_every: int = 25, start_page: int = 1) -> List[Dict[str, Any]]:
         """
         Método ULTRA RÁPIDO para scraping masivo usando JSON-LD
         Elimina navegación individual a páginas de detalle
         """
         print(f"⚡ SCRAPING ULTRA RÁPIDO - JSON-LD MODE")
-        print(f"📊 Objetivo: ~{total_pages * 30:,} propiedades")
+        print(f"📊 Páginas: {start_page} a {total_pages}")
+        print(f"📊 Objetivo: ~{(total_pages - start_page + 1) * 30:,} propiedades")
         print(f"🚀 Velocidad estimada: <0.5s por propiedad")
         print(f"💾 Guardar cada: {save_every} páginas")
         print("=" * 60)
@@ -1464,7 +1465,7 @@ class ProperatiFullScraper:
         failed_pages = []
         
         with SB(uc=True, headless=self.headless, incognito=self.incognito) as sb:
-            for page_num in range(1, total_pages + 1):
+            for page_num in range(start_page, total_pages + 1):
                 page_start_time = time.time()
                 
                 try:
@@ -1921,7 +1922,8 @@ def main():
             data = scraper.scrape_ultra_fast(
                 total_pages=args.pages,
                 output_name=output_name,
-                save_every=max(1, args.save_every) if args.save_every > 0 else 25  # Default save every 25 pages
+                save_every=max(1, args.save_every) if args.save_every > 0 else 25,  # Default save every 25 pages
+                start_page=args.start_page
             )
         elif args.large_dataset:
             # Usar método optimizado para datasets grandes
