@@ -1536,6 +1536,256 @@ class ProperatiFullScraper:
         
         return all_data
     
+    def scrape_by_neighborhoods(self, output_name: str = "properati_by_neighborhoods", 
+                               save_every_neighborhood: int = 5) -> List[Dict[str, Any]]:
+        """
+        Método para scraping por barrios de Buenos Aires
+        Evita límites de páginas scrapeando cada barrio por separado
+        """
+        # Lista de barrios de Buenos Aires con sus URLs de Properati
+        neighborhoods = {
+            'Agronomía': 'agronomia',
+            'Almagro': 'almagro',
+            'Balvanera': 'balvanera',
+            'Barracas': 'barracas',
+            'Belgrano': 'belgrano',
+            'Boedo': 'boedo',
+            'Caballito': 'caballito',
+            'Chacarita': 'chacarita',
+            'Coghlan': 'coghlan',
+            'Colegiales': 'colegiales',
+            'Constitución': 'constitucion',
+            'Flores': 'flores',
+            'Floresta': 'floresta',
+            'La Boca': 'la-boca',
+            'La Paternal': 'la-paternal',
+            'Liniers': 'liniers',
+            'Mataderos': 'mataderos',
+            'Montserrat': 'montserrat',
+            'Nueva Pompeya': 'nueva-pompeya',
+            'Núñez': 'nunez',
+            'Palermo': 'palermo',
+            'Parque Avellaneda': 'parque-avellaneda',
+            'Parque Chacabuco': 'parque-chacabuco',
+            'Parque Chas': 'parque-chas',
+            'Parque Patricios': 'parque-patricios',
+            'Puerto Madero': 'puerto-madero',
+            'Recoleta': 'recoleta',
+            'Retiro': 'retiro',
+            'Saavedra': 'saavedra',
+            'San Cristóbal': 'san-cristobal',
+            'San Nicolás': 'san-nicolas',
+            'San Telmo': 'san-telmo',
+            'Versalles': 'versalles',
+            'Villa Crespo': 'villa-crespo',
+            'Villa Devoto': 'villa-devoto',
+            'Villa General Mitre': 'villa-general-mitre',
+            'Villa Lugano': 'villa-lugano',
+            'Villa Luro': 'villa-luro',
+            'Villa Ortúzar': 'villa-ortuzar',
+            'Villa Pueyrredón': 'villa-pueyrredon',
+            'Villa Real': 'villa-real',
+            'Villa Riachuelo': 'villa-riachuelo',
+            'Villa Santa Rita': 'villa-santa-rita',
+            'Villa Soldati': 'villa-soldati',
+            'Villa Urquiza': 'villa-urquiza',
+            'Villa del Parque': 'villa-del-parque',
+        }
+        
+        print(f"🏘️  SCRAPING POR BARRIOS DE BUENOS AIRES")
+        print(f"📊 Total barrios: {len(neighborhoods)}")
+        print(f"💾 Guardar cada: {save_every_neighborhood} barrios")
+        print("=" * 60)
+        
+        start_time = time.time()
+        all_data = []
+        failed_neighborhoods = []
+        neighborhood_stats = {}
+        
+        with SB(uc=True, headless=self.headless, incognito=self.incognito) as sb:
+            for idx, (neighborhood_name, neighborhood_slug) in enumerate(neighborhoods.items(), 1):
+                neighborhood_start_time = time.time()
+                
+                try:
+                    print(f"\n🏘️  Procesando {neighborhood_name} ({idx}/{len(neighborhoods)})")
+                    
+                    # Scraping completo del barrio
+                    neighborhood_data = self._scrape_neighborhood(sb, neighborhood_name, neighborhood_slug)
+                    
+                    if neighborhood_data:
+                        all_data.extend(neighborhood_data)
+                        neighborhood_time = time.time() - neighborhood_start_time
+                        props_per_second = len(neighborhood_data) / neighborhood_time if neighborhood_time > 0 else 0
+                        
+                        neighborhood_stats[neighborhood_name] = {
+                            'properties': len(neighborhood_data),
+                            'time': neighborhood_time,
+                            'props_per_second': props_per_second
+                        }
+                        
+                        print(f"✅ {neighborhood_name}: {len(neighborhood_data)} propiedades "
+                              f"({neighborhood_time:.1f}s, {props_per_second:.1f} props/s)")
+                    else:
+                        failed_neighborhoods.append(neighborhood_name)
+                        print(f"❌ {neighborhood_name}: Sin propiedades")
+                    
+                    # Guardar progreso cada N barrios
+                    if idx % save_every_neighborhood == 0 or idx == len(neighborhoods):
+                        self._save_neighborhood_progress(all_data, output_name, idx, len(neighborhoods), neighborhood_stats)
+                        
+                        # Mostrar estadísticas
+                        elapsed_time = time.time() - start_time
+                        total_props = len(all_data)
+                        avg_time_per_prop = elapsed_time / total_props if total_props > 0 else 0
+                        
+                        print(f"\n📈 PROGRESO ({idx} barrios procesados):")
+                        print(f"   ⏱️  Tiempo transcurrido: {elapsed_time/3600:.2f} horas")
+                        print(f"   📊 Propiedades extraídas: {total_props:,}")
+                        print(f"   🚀 Velocidad promedio: {avg_time_per_prop:.3f}s/propiedad")
+                        print(f"   🏘️  Barrios exitosos: {len(neighborhood_stats)}")
+                        print(f"   ❌ Barrios fallidos: {len(failed_neighborhoods)}")
+                    
+                    # Delay entre barrios
+                    if idx < len(neighborhoods):
+                        time.sleep(self.delay)
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ Error procesando barrio {neighborhood_name}: {e}")
+                    failed_neighborhoods.append(neighborhood_name)
+        
+        # Estadísticas finales
+        total_time = time.time() - start_time
+        self._print_neighborhood_stats(all_data, total_time, failed_neighborhoods, neighborhood_stats)
+        
+        return all_data
+    
+    def _scrape_neighborhood(self, sb, neighborhood_name: str, neighborhood_slug: str) -> List[Dict[str, Any]]:
+        """Scraping completo de un barrio específico"""
+        neighborhood_data = []
+        page = 1
+        max_pages = 50  # Límite de seguridad por barrio
+        
+        while page <= max_pages:
+            try:
+                # Construir URL del barrio
+                if page == 1:
+                    url = f"https://www.properati.com.ar/s/capital-federal/{neighborhood_slug}/venta"
+                else:
+                    url = f"https://www.properati.com.ar/s/capital-federal/{neighborhood_slug}/venta/{page}"
+                
+                self.logger.debug(f"🌐 {neighborhood_name} página {page}: {url}")
+                sb.get(url)
+                time.sleep(1)
+                
+                # Verificar si hay propiedades
+                try:
+                    sb.wait_for_element_visible('.snippet', timeout=5)
+                    properties_count = len(sb.find_elements('.snippet'))
+                    
+                    if properties_count == 0:
+                        self.logger.debug(f"📄 {neighborhood_name}: No hay más propiedades en página {page}")
+                        break
+                        
+                except:
+                    self.logger.debug(f"📄 {neighborhood_name}: No se encontraron propiedades en página {page}")
+                    break
+                
+                # Extraer propiedades de la página
+                page_properties = self._extract_page_properties(sb, page, properties_count, False)
+                
+                if not page_properties:
+                    self.logger.debug(f"📄 {neighborhood_name}: Sin propiedades válidas en página {page}")
+                    break
+                
+                # Extraer coordenadas
+                coordinates_map = self._extract_coordinates_from_jsonld(sb)
+                if not coordinates_map:
+                    coordinates_map = self._extract_coordinates_from_scripts_fast(sb)
+                
+                # Asignar coordenadas
+                processed_properties = self._match_property_coordinates(page_properties, coordinates_map)
+                
+                # Agregar información del barrio
+                for prop in processed_properties:
+                    prop['scraped_neighborhood'] = neighborhood_name
+                    prop['neighborhood_slug'] = neighborhood_slug
+                
+                neighborhood_data.extend(processed_properties)
+                
+                self.logger.debug(f"📄 {neighborhood_name} página {page}: {len(processed_properties)} propiedades")
+                
+                # Si obtuvimos menos de 30 propiedades, probablemente es la última página
+                if len(processed_properties) < 30:
+                    break
+                
+                page += 1
+                time.sleep(0.5)  # Delay corto entre páginas del mismo barrio
+                
+            except Exception as e:
+                self.logger.error(f"❌ Error en {neighborhood_name} página {page}: {e}")
+                break
+        
+        return neighborhood_data
+    
+    def _save_neighborhood_progress(self, data: List[Dict], output_name: str, 
+                                  current_neighborhood: int, total_neighborhoods: int,
+                                  neighborhood_stats: Dict):
+        """Guarda el progreso durante el scraping por barrios"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        progress_filename = f"{output_name}_progress_n{current_neighborhood}of{total_neighborhoods}_{timestamp}"
+        
+        # Guardar datos
+        self.scraped_data = data
+        saved_files = self.save_data(progress_filename, "both", False)
+        
+        self.logger.info(f"💾 Progreso guardado: {len(data):,} propiedades de {current_neighborhood} barrios")
+        for format_type, filepath in saved_files.items():
+            self.logger.info(f"   {format_type.upper()}: {filepath}")
+        
+        # Guardar estadísticas de barrios
+        stats_filename = f"data/raw/{progress_filename}_neighborhood_stats.json"
+        try:
+            with open(stats_filename, 'w', encoding='utf-8') as f:
+                json.dump(neighborhood_stats, f, indent=2, ensure_ascii=False)
+            self.logger.info(f"📊 Estadísticas por barrio guardadas: {stats_filename}")
+        except Exception as e:
+            self.logger.error(f"❌ Error guardando estadísticas: {e}")
+    
+    def _print_neighborhood_stats(self, data: List[Dict], total_time: float, 
+                                failed_neighborhoods: List[str], neighborhood_stats: Dict):
+        """Imprime estadísticas finales del scraping por barrios"""
+        total_props = len(data)
+        props_per_second = total_props / total_time if total_time > 0 else 0
+        
+        print(f"\n🏘️  SCRAPING POR BARRIOS COMPLETADO!")
+        print("=" * 60)
+        print(f"📊 Propiedades extraídas: {total_props:,}")
+        print(f"⏱️  Tiempo total: {total_time/3600:.2f} horas ({total_time/60:.1f} minutos)")
+        print(f"🚀 Velocidad promedio: {props_per_second:.2f} props/s")
+        print(f"🏘️  Barrios exitosos: {len(neighborhood_stats)}")
+        print(f"❌ Barrios fallidos: {len(failed_neighborhoods)}")
+        
+        if failed_neighborhoods:
+            print(f"\n❌ Barrios con errores:")
+            for neighborhood in failed_neighborhoods:
+                print(f"   - {neighborhood}")
+        
+        # Top barrios por cantidad de propiedades
+        if neighborhood_stats:
+            print(f"\n🏆 TOP 10 BARRIOS (por cantidad de propiedades):")
+            sorted_neighborhoods = sorted(neighborhood_stats.items(), 
+                                        key=lambda x: x[1]['properties'], reverse=True)
+            
+            for i, (neighborhood, stats) in enumerate(sorted_neighborhoods[:10], 1):
+                props = stats['properties']
+                time_taken = stats['time']
+                print(f"   {i:2d}. {neighborhood:<20} {props:4d} propiedades ({time_taken:5.1f}s)")
+        
+        # Análisis de coordenadas
+        props_with_coords = sum(1 for prop in data if prop.get('latitude'))
+        coord_success_rate = props_with_coords / total_props if total_props > 0 else 0
+        print(f"\n🎯 Propiedades con coordenadas: {props_with_coords:,} ({coord_success_rate*100:.1f}%)")
+    
     def _print_ultra_fast_stats(self, data: List[Dict], total_time: float, failed_pages: List[int]):
         """Imprime estadísticas del scraping ultra rápido"""
         total_props = len(data)
@@ -1887,6 +2137,8 @@ def main():
     parser.add_argument("--large-dataset", action="store_true", help="Modo optimizado para datasets grandes (68k+ propiedades)")
     parser.add_argument("--batch-size", type=int, default=50, help="Tamaño de lote para procesamiento optimizado (default: 50)")
     parser.add_argument("--ultra-fast", action="store_true", help="Modo ULTRA RÁPIDO usando JSON-LD (sin navegación individual)")
+    parser.add_argument("--by-neighborhoods", action="store_true", help="Scraping por barrios de Buenos Aires (evita límites de páginas)")
+    parser.add_argument("--save-every-neighborhood", type=int, default=5, help="Guardar progreso cada N barrios (default: 5)")
     
     args = parser.parse_args()
     
@@ -1916,7 +2168,14 @@ def main():
         # Ejecutar scraping
         output_name = args.resume if args.resume else args.output
         
-        if args.ultra_fast:
+        if args.by_neighborhoods:
+            # Usar método por barrios
+            print("🏘️  MODO SCRAPING POR BARRIOS ACTIVADO")
+            data = scraper.scrape_by_neighborhoods(
+                output_name=output_name,
+                save_every_neighborhood=args.save_every_neighborhood
+            )
+        elif args.ultra_fast:
             # Usar método ULTRA RÁPIDO
             print("⚡ MODO ULTRA RÁPIDO ACTIVADO")
             data = scraper.scrape_ultra_fast(
