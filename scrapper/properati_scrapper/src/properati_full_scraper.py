@@ -1659,14 +1659,13 @@ class ProperatiFullScraper:
             'Constitución': 'constitucion',
             'Flores': 'flores',
             'Floresta': 'floresta',
-            'La Boca': 'la-boca',
-            'La Paternal': 'la-paternal',
             'Liniers': 'liniers',
             'Mataderos': 'mataderos',
-            'Montserrat': 'montserrat',
-            'Nueva Pompeya': 'nueva-pompeya',
             'Núñez': 'nunez',
-            'Palermo': 'palermo',
+            'Palermo Hollywood': 'palermo-hollywood',
+            'Palermo Viejo': 'palermo-viejo',
+            'Palermo Soho': 'palermo-soho',
+            'Palermo Chico': 'palermo-chico',
             'Parque Avellaneda': 'parque-avellaneda',
             'Parque Chacabuco': 'parque-chacabuco',
             'Parque Chas': 'parque-chas',
@@ -1882,7 +1881,7 @@ class ProperatiFullScraper:
         """Scraping completo de un barrio específico"""
         neighborhood_data = []
         page = 1
-        max_pages = 50  # Límite de seguridad por barrio
+        max_pages = 150  # Límite de seguridad por barrio
         
         while page <= max_pages:
             try:

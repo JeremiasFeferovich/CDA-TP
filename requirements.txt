@@ -1,9 +1,9 @@
 # Web Scraping Dependencies
-selenium==4.15.2
+selenium==4.35.0
 seleniumbase==4.41.3
 webdriver-manager==4.0.1
-beautifulsoup4==4.12.2
-requests==2.31.0
+beautifulsoup4~=4.13.5
+requests>=2.32.5,<2.33
 fake-useragent==1.4.0
 
 # Data Processing
