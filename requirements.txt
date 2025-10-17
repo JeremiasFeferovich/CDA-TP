@@ -19,3 +19,5 @@ loguru==0.7.2
 
 # Optional: For advanced anti-detection
 undetected-chromedriver==3.5.4
+
+xgboost>=3.0.5
