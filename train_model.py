@@ -346,32 +346,7 @@ print(f"  Mean neighborhood avg: ${df['neighborhood_avg_price_per_sqm'].mean():,
 print(f"  Min neighborhood avg: ${df['neighborhood_avg_price_per_sqm'].min():,.2f}/m²")
 print(f"  Max neighborhood avg: ${df['neighborhood_avg_price_per_sqm'].max():,.2f}/m²")
 
-# 6. Polynomial and interaction features
-print(f"[{datetime.now().strftime('%H:%M:%S')}] Creating polynomial and interaction features...")
-calc_start = time.time()
-
-# Location polynomial features (capture non-linear spatial patterns)
-df['latitude_squared'] = df['latitude'] ** 2
-df['longitude_squared'] = df['longitude'] ** 2
-df['lat_lon_interaction'] = df['latitude'] * df['longitude']
-
-# Property size ratios
-df['area_per_bedroom'] = df['area'] / df['bedrooms']
-df['area_per_bathroom'] = df['area'] / df['bathrooms']
-df['bathroom_bedroom_ratio'] = df['bathrooms'] / df['bedrooms']
-
-# Luxury score (composite of premium amenities)
-df['luxury_score'] = (df['has_pool'] * 2 + df['has_gym'] + 
-                     df['has_doorman'] + df['has_security'] + df['has_sum'])
-
-calc_time = time.time() - calc_start
-print(f"  ✅ Completed in {calc_time:.1f} seconds")
-print(f"  Created 10 polynomial and interaction features")
-print(f"    - Location: latitude², longitude², lat×lon")
-print(f"    - Ratios: area/bedroom, area/bathroom, bathroom/bedroom")
-print(f"    - Composite: luxury_score")
-
-# 7. Total amenities
+# 6. Total amenities
 amenity_cols = [col for col in df.columns if col.startswith('has_')]
 df['total_amenities'] = df[amenity_cols].sum(axis=1)
 print(f"Created 'total_amenities' feature from {len(amenity_cols)} amenity columns")
@@ -482,9 +457,7 @@ print("\n### Scaling features...")
 numeric_features = ['area', 'balcony_count', 'bathrooms', 'bedrooms', 
                    'latitude', 'longitude', 'distance_to_nearest_subway',
                    'subway_stations_nearby', 'bus_stops_nearby', 'total_amenities',
-                   'neighborhood_avg_price_per_sqm', 'latitude_squared', 
-                   'longitude_squared', 'lat_lon_interaction', 'area_per_bedroom',
-                   'area_per_bathroom', 'bathroom_bedroom_ratio', 'luxury_score']
+                   'neighborhood_avg_price_per_sqm']
 
 # Only scale features that exist in the dataset
 numeric_features = [f for f in numeric_features if f in X_train.columns]
@@ -499,14 +472,6 @@ X_test_scaled[numeric_features] = scaler.transform(X_test[numeric_features])
 print(f"Scaled {len(numeric_features)} numeric features")
 print(f"Boolean features preserved as-is")
 
-# Log transform target variable (prices are log-normally distributed)
-print("\n### Log transforming target variable...")
-print(f"  Original price range: ${y_train.min():,.0f} - ${y_train.max():,.0f}")
-y_train_log = np.log1p(y_train)  # log1p(x) = log(1 + x) handles zeros safely
-y_test_log = np.log1p(y_test)
-print(f"  Log-transformed range: {y_train_log.min():.4f} - {y_train_log.max():.4f}")
-print(f"  ℹ️  Training on log-transformed prices (will transform back for RMSE)")
-
 section_time = time.time() - section_start
 print(f"\n✅ Section 2 completed in {section_time:.1f} seconds")
 
@@ -518,7 +483,6 @@ print("\n### 3. MODEL TRAINING WITH GRIDSEARCHCV")
 print("-" * 80)
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting model training...")
 print(f"Training 3 models: XGBoost, Ridge Regression, SVR")
-print(f"⚠️  Training on LOG-TRANSFORMED prices")
 print(f"This is the longest step - please be patient!\n")
 
 models = {}
@@ -545,14 +509,14 @@ param_grid_xgb = {
 xgb = XGBRegressor(random_state=42, n_jobs=1)
 grid_xgb = GridSearchCV(xgb, param_grid_xgb, cv=3, scoring='neg_mean_squared_error', 
                         verbose=2, n_jobs=1)
-grid_xgb.fit(X_train_scaled, y_train_log)  # Train on LOG prices
+grid_xgb.fit(X_train_scaled, y_train)
 
 model_time = time.time() - model_start
 models['XGBoost'] = grid_xgb.best_estimator_
 best_params['XGBoost'] = grid_xgb.best_params_
 print(f"\n✅ XGBoost completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
 print(f"Best parameters: {grid_xgb.best_params_}")
-print(f"Best CV MSE (log scale): {-grid_xgb.best_score_:.4f}")
+print(f"Best CV MSE: {-grid_xgb.best_score_:.4f}")
 
 # Ridge Regression
 print(f"\n{'='*60}")
@@ -571,14 +535,14 @@ param_grid_ridge = {
 ridge = Ridge(random_state=42)
 grid_ridge = GridSearchCV(ridge, param_grid_ridge, cv=3, scoring='neg_mean_squared_error',
                          verbose=2, n_jobs=1)
-grid_ridge.fit(X_train_scaled, y_train_log)  # Train on LOG prices
+grid_ridge.fit(X_train_scaled, y_train)
 
 model_time = time.time() - model_start
 models['Ridge'] = grid_ridge.best_estimator_
 best_params['Ridge'] = grid_ridge.best_params_
 print(f"\n✅ Ridge Regression completed in {model_time:.1f} seconds")
 print(f"Best parameters: {grid_ridge.best_params_}")
-print(f"Best CV MSE (log scale): {-grid_ridge.best_score_:.4f}")
+print(f"Best CV MSE: {-grid_ridge.best_score_:.4f}")
 
 # SVR (Support Vector Regressor)
 print(f"\n{'='*60}")
@@ -599,14 +563,14 @@ param_grid_svr = {
 svr = SVR()
 grid_svr = GridSearchCV(svr, param_grid_svr, cv=3, scoring='neg_mean_squared_error',
                        verbose=2, n_jobs=1)
-grid_svr.fit(X_train_scaled, y_train_log)  # Train on LOG prices
+grid_svr.fit(X_train_scaled, y_train)
 
 model_time = time.time() - model_start
 models['SVR'] = grid_svr.best_estimator_
 best_params['SVR'] = grid_svr.best_params_
 print(f"\n✅ SVR completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
 print(f"Best parameters: {grid_svr.best_params_}")
-print(f"Best CV MSE (log scale): {-grid_svr.best_score_:.4f}")
+print(f"Best CV MSE: {-grid_svr.best_score_:.4f}")
 
 section_time = time.time() - section_start
 print(f"\n{'='*80}")
@@ -624,15 +588,11 @@ print(f"[{datetime.now().strftime('%H:%M:%S')}] Evaluating all models on test se
 results = {}
 
 for name, model in models.items():
-    # Predictions in LOG scale
-    y_train_pred_log = model.predict(X_train_scaled)
-    y_test_pred_log = model.predict(X_test_scaled)
+    # Predictions
+    y_train_pred = model.predict(X_train_scaled)
+    y_test_pred = model.predict(X_test_scaled)
     
-    # Transform back from LOG scale to original prices
-    y_train_pred = np.expm1(y_train_pred_log)  # expm1 is inverse of log1p
-    y_test_pred = np.expm1(y_test_pred_log)
-    
-    # Calculate metrics in ORIGINAL price scale
+    # Calculate metrics
     train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
     test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
     train_r2 = r2_score(y_train, y_train_pred)
