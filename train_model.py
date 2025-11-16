@@ -36,8 +36,6 @@ plt.rcParams["figure.figsize"] = (10, 6)
 script_start_time = time.time()
 
 print("=" * 80)
-print("PROPERTY PRICE PREDICTION MODEL TRAINING - VERSION 2")
-print("Improvements: Filter >$1M + XGBoost + Non-normalized Data")
 print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print("=" * 80)
 
@@ -235,14 +233,22 @@ print(df['currency'].value_counts())
 df = df[df['currency'] == 'USD'].copy()
 print(f"Filtered for USD only. New shape: {df.shape}")
 
-# **NEW: Filter out properties > $1M**
-print(f"\n### Filtering properties > $1,000,000...")
-before_filter = len(df)
-df = df[df['price'] <= 1_000_000].copy()
-after_filter = len(df)
-print(f"  Removed {before_filter - after_filter:,} properties ({(before_filter - after_filter)/before_filter*100:.1f}%)")
-print(f"  Remaining: {after_filter:,} properties")
-print(f"  New price range: ${df['price'].min():,.0f} - ${df['price'].max():,.0f}")
+# Filter out properties < $30K (minimum threshold)
+print(f"\n### Filtering properties < $30,000...")
+before_min_filter = len(df)
+df = df[df['price'] >= 30_000].copy()
+after_min_filter = len(df)
+print(f"  Removed {before_min_filter - after_min_filter:,} properties ({(before_min_filter - after_min_filter)/before_min_filter*100:.1f}%)")
+print(f"  Remaining: {after_min_filter:,} properties")
+
+# **NEW: Filter out properties > $700K**
+print(f"\n### Filtering properties > $700,000...")
+before_max_filter = len(df)
+df = df[df['price'] <= 700_000].copy()
+after_max_filter = len(df)
+print(f"  Removed {before_max_filter - after_max_filter:,} properties ({(before_max_filter - after_max_filter)/before_max_filter*100:.1f}%)")
+print(f"  Remaining: {after_max_filter:,} properties")
+print(f"  Final price range: ${df['price'].min():,.0f} - ${df['price'].max():,.0f}")
 
 # Drop currency column after filtering
 df = df.drop(columns=['currency'])
@@ -482,7 +488,7 @@ section_start = time.time()
 print("\n### 3. MODEL TRAINING WITH GRIDSEARCHCV")
 print("-" * 80)
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting model training...")
-print(f"Training 3 models: XGBoost, Ridge Regression, SVR")
+print(f"Training 1 model: XGBoost (Ridge and SVR commented out)")
 print(f"This is the longest step - please be patient!\n")
 
 models = {}
@@ -490,7 +496,7 @@ best_params = {}
 
 # **PRIMARY: XGBoost (replaces Random Forest)**
 print(f"\n{'='*60}")
-print(f"MODEL 1/3: XGBoost (Primary Model)")
+print(f"MODEL: XGBoost (Only Model - Ridge and SVR commented out)")
 print(f"{'='*60}")
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
 print(f"Hyperparameter grid: 18 combinations × 3 folds = 54 fits")
@@ -518,59 +524,59 @@ print(f"\n✅ XGBoost completed in {model_time:.1f} seconds ({model_time/60:.1f}
 print(f"Best parameters: {grid_xgb.best_params_}")
 print(f"Best CV MSE: {-grid_xgb.best_score_:.4f}")
 
-# Ridge Regression
-print(f"\n{'='*60}")
-print(f"MODEL 2/3: Ridge Regression")
-print(f"{'='*60}")
-print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
-print(f"Hyperparameter grid: 4 combinations × 3 folds = 12 fits")
-print(f"Estimated time: 30-60 seconds")
-print(f"{'='*60}\n")
+# Ridge Regression - COMMENTED OUT (only running XGBoost)
+# print(f"\n{'='*60}")
+# print(f"MODEL 2/3: Ridge Regression")
+# print(f"{'='*60}")
+# print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
+# print(f"Hyperparameter grid: 4 combinations × 3 folds = 12 fits")
+# print(f"Estimated time: 30-60 seconds")
+# print(f"{'='*60}\n")
+# 
+# model_start = time.time()
+# param_grid_ridge = {
+#     'alpha': [0.1, 1.0, 10.0, 100.0]
+# }
+# 
+# ridge = Ridge(random_state=42)
+# grid_ridge = GridSearchCV(ridge, param_grid_ridge, cv=3, scoring='neg_mean_squared_error',
+#                          verbose=2, n_jobs=1)
+# grid_ridge.fit(X_train_scaled, y_train)
+# 
+# model_time = time.time() - model_start
+# models['Ridge'] = grid_ridge.best_estimator_
+# best_params['Ridge'] = grid_ridge.best_params_
+# print(f"\n✅ Ridge Regression completed in {model_time:.1f} seconds")
+# print(f"Best parameters: {grid_ridge.best_params_}")
+# print(f"Best CV MSE: {-grid_ridge.best_score_:.4f}")
 
-model_start = time.time()
-param_grid_ridge = {
-    'alpha': [0.1, 1.0, 10.0, 100.0]
-}
-
-ridge = Ridge(random_state=42)
-grid_ridge = GridSearchCV(ridge, param_grid_ridge, cv=3, scoring='neg_mean_squared_error',
-                         verbose=2, n_jobs=1)
-grid_ridge.fit(X_train_scaled, y_train)
-
-model_time = time.time() - model_start
-models['Ridge'] = grid_ridge.best_estimator_
-best_params['Ridge'] = grid_ridge.best_params_
-print(f"\n✅ Ridge Regression completed in {model_time:.1f} seconds")
-print(f"Best parameters: {grid_ridge.best_params_}")
-print(f"Best CV MSE: {-grid_ridge.best_score_:.4f}")
-
-# SVR (Support Vector Regressor)
-print(f"\n{'='*60}")
-print(f"MODEL 3/3: Support Vector Regressor (SVR)")
-print(f"{'='*60}")
-print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
-print(f"Hyperparameter grid: 2 combinations × 3 folds = 6 fits")
-print(f"Estimated time: 2-5 minutes (SVR is slow on large datasets)")
-print(f"{'='*60}\n")
-
-model_start = time.time()
-param_grid_svr = {
-    'C': [1, 10],
-    'kernel': ['rbf'],
-    'epsilon': [0.1]
-}
-
-svr = SVR()
-grid_svr = GridSearchCV(svr, param_grid_svr, cv=3, scoring='neg_mean_squared_error',
-                       verbose=2, n_jobs=1)
-grid_svr.fit(X_train_scaled, y_train)
-
-model_time = time.time() - model_start
-models['SVR'] = grid_svr.best_estimator_
-best_params['SVR'] = grid_svr.best_params_
-print(f"\n✅ SVR completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
-print(f"Best parameters: {grid_svr.best_params_}")
-print(f"Best CV MSE: {-grid_svr.best_score_:.4f}")
+# SVR (Support Vector Regressor) - COMMENTED OUT (only running XGBoost)
+# print(f"\n{'='*60}")
+# print(f"MODEL 3/3: Support Vector Regressor (SVR)")
+# print(f"{'='*60}")
+# print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
+# print(f"Hyperparameter grid: 2 combinations × 3 folds = 6 fits")
+# print(f"Estimated time: 2-5 minutes (SVR is slow on large datasets)")
+# print(f"{'='*60}\n")
+# 
+# model_start = time.time()
+# param_grid_svr = {
+#     'C': [1, 10],
+#     'kernel': ['rbf'],
+#     'epsilon': [0.1]
+# }
+# 
+# svr = SVR()
+# grid_svr = GridSearchCV(svr, param_grid_svr, cv=3, scoring='neg_mean_squared_error',
+#                        verbose=2, n_jobs=1)
+# grid_svr.fit(X_train_scaled, y_train)
+# 
+# model_time = time.time() - model_start
+# models['SVR'] = grid_svr.best_estimator_
+# best_params['SVR'] = grid_svr.best_params_
+# print(f"\n✅ SVR completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
+# print(f"Best parameters: {grid_svr.best_params_}")
+# print(f"Best CV MSE: {-grid_svr.best_score_:.4f}")
 
 section_time = time.time() - section_start
 print(f"\n{'='*80}")
