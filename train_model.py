@@ -141,6 +141,17 @@ SUBWAY_STATIONS = [
     (-34.603014, -58.370413),  # CORREO CENTRAL - Line E
 ]
 
+# ============================================================================
+# BUS STOPS COORDINATES
+# ============================================================================
+# Bus stop data from OpenStreetMap via Overpass API
+# Source: data/bus_stops_coords.npy
+# Total stops: 18,923
+# Format: numpy array with shape (n, 2) where columns are [latitude, longitude]
+print("Loading bus stops data...")
+BUS_STOPS = np.load('/home/jeremias.feferovich/Desktop/ITBA/CDA/CDA-TP/data/bus_stops_coords.npy')
+print(f"✅ Loaded {len(BUS_STOPS):,} bus stops from OpenStreetMap")
+
 def haversine(lon1, lat1, lon2, lat2):
     """
     Calculate the great circle distance in kilometers between two points 
@@ -174,6 +185,29 @@ def count_subway_stations_nearby(lat, lon, radius_km=1.0):
     count = sum(1 for station in SUBWAY_STATIONS 
                 if haversine(lon, lat, station[1], station[0]) <= radius_km)
     return count
+
+def count_bus_stops_nearby(lat, lon, radius_km=0.5):
+    """
+    Count number of bus stops within radius_km (default 500m = 0.5km)
+    Uses vectorized numpy operations for better performance with large datasets
+    """
+    if pd.isna(lat) or pd.isna(lon):
+        return 0
+    
+    # Vectorized haversine calculation for all bus stops at once
+    # BUS_STOPS is a numpy array with shape (n, 2) where columns are [lat, lon]
+    lon1, lat1 = radians(lon), radians(lat)
+    lon2 = np.radians(BUS_STOPS[:, 1])
+    lat2 = np.radians(BUS_STOPS[:, 0])
+    
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    
+    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+    distances = 6371 * c  # Earth radius in km
+    
+    return int(np.sum(distances <= radius_km))
 
 # ============================================================================
 # 1. DATA LOADING AND FEATURE ENGINEERING
@@ -247,7 +281,97 @@ print(f"  Created 'subway_stations_nearby' feature")
 print(f"  Properties with 0 nearby stations: {(df['subway_stations_nearby'] == 0).sum()}")
 print(f"  Properties with 1+ nearby stations: {(df['subway_stations_nearby'] > 0).sum()}")
 
-# 4. Total amenities
+# 4. Count of bus stops nearby (within 500m)
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Counting nearby bus stops (within 500m)...")
+print(f"  Processing {len(df)} properties with vectorized operations...")
+calc_start = time.time()
+df['bus_stops_nearby'] = df.apply(
+    lambda row: count_bus_stops_nearby(row['latitude'], row['longitude'], radius_km=0.5),
+    axis=1
+)
+calc_time = time.time() - calc_start
+print(f"  ✅ Completed in {calc_time:.1f} seconds")
+print(f"  Created 'bus_stops_nearby' feature")
+print(f"  Mean bus stops within 500m: {df['bus_stops_nearby'].mean():.2f}")
+print(f"  Max bus stops within 500m: {df['bus_stops_nearby'].max()}")
+print(f"  Properties with 0 nearby bus stops: {(df['bus_stops_nearby'] == 0).sum()}")
+print(f"  Properties with 10+ nearby bus stops: {(df['bus_stops_nearby'] >= 10).sum()}")
+
+# 5. Average price per sqm in neighborhood (grid-based)
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Calculating neighborhood avg price per sqm...")
+print(f"  Using spatial grid approach (0.01 degree cells ≈ 1.1km)")
+calc_start = time.time()
+
+# Create grid cells for each property (0.01 degree ≈ 1.1 km in Buenos Aires)
+grid_size = 0.01
+df['grid_lat'] = (df['latitude'] / grid_size).round() * grid_size
+df['grid_lon'] = (df['longitude'] / grid_size).round() * grid_size
+df['grid_cell'] = df['grid_lat'].astype(str) + '_' + df['grid_lon'].astype(str)
+
+# Calculate average price per sqm for each grid cell
+grid_avg_price_per_sqm = df.groupby('grid_cell')['price_per_sqm'].mean()
+
+# Map back to properties
+df['neighborhood_avg_price_per_sqm'] = df['grid_cell'].map(grid_avg_price_per_sqm)
+
+# For cells with only 1 property, use the broader area average (3x3 grid)
+def get_neighborhood_avg_with_fallback(row):
+    """Get neighborhood average, with fallback to broader area if cell has < 3 properties"""
+    cell_count = df[df['grid_cell'] == row['grid_cell']].shape[0]
+    
+    if cell_count >= 3:
+        return row['neighborhood_avg_price_per_sqm']
+    else:
+        # Use 3x3 grid around the cell
+        lat, lon = row['grid_lat'], row['grid_lon']
+        nearby_mask = (
+            (df['grid_lat'].between(lat - 2*grid_size, lat + 2*grid_size)) &
+            (df['grid_lon'].between(lon - 2*grid_size, lon + 2*grid_size))
+        )
+        nearby_properties = df[nearby_mask]
+        if len(nearby_properties) > 0:
+            return nearby_properties['price_per_sqm'].mean()
+        else:
+            return row['neighborhood_avg_price_per_sqm']
+
+df['neighborhood_avg_price_per_sqm'] = df.apply(get_neighborhood_avg_with_fallback, axis=1)
+
+# Drop temporary grid columns
+df = df.drop(columns=['grid_lat', 'grid_lon', 'grid_cell'])
+
+calc_time = time.time() - calc_start
+print(f"  ✅ Completed in {calc_time:.1f} seconds")
+print(f"  Created 'neighborhood_avg_price_per_sqm' feature")
+print(f"  Mean neighborhood avg: ${df['neighborhood_avg_price_per_sqm'].mean():,.2f}/m²")
+print(f"  Min neighborhood avg: ${df['neighborhood_avg_price_per_sqm'].min():,.2f}/m²")
+print(f"  Max neighborhood avg: ${df['neighborhood_avg_price_per_sqm'].max():,.2f}/m²")
+
+# 6. Polynomial and interaction features
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Creating polynomial and interaction features...")
+calc_start = time.time()
+
+# Location polynomial features (capture non-linear spatial patterns)
+df['latitude_squared'] = df['latitude'] ** 2
+df['longitude_squared'] = df['longitude'] ** 2
+df['lat_lon_interaction'] = df['latitude'] * df['longitude']
+
+# Property size ratios
+df['area_per_bedroom'] = df['area'] / df['bedrooms']
+df['area_per_bathroom'] = df['area'] / df['bathrooms']
+df['bathroom_bedroom_ratio'] = df['bathrooms'] / df['bedrooms']
+
+# Luxury score (composite of premium amenities)
+df['luxury_score'] = (df['has_pool'] * 2 + df['has_gym'] + 
+                     df['has_doorman'] + df['has_security'] + df['has_sum'])
+
+calc_time = time.time() - calc_start
+print(f"  ✅ Completed in {calc_time:.1f} seconds")
+print(f"  Created 10 polynomial and interaction features")
+print(f"    - Location: latitude², longitude², lat×lon")
+print(f"    - Ratios: area/bedroom, area/bathroom, bathroom/bedroom")
+print(f"    - Composite: luxury_score")
+
+# 7. Total amenities
 amenity_cols = [col for col in df.columns if col.startswith('has_')]
 df['total_amenities'] = df[amenity_cols].sum(axis=1)
 print(f"Created 'total_amenities' feature from {len(amenity_cols)} amenity columns")
@@ -263,7 +387,9 @@ print(f"Final dataset shape: {df.shape}")
 # Prepare feature matrix X and target y
 print("\n### Preparing feature matrix and target...")
 target = 'price'
-features_to_drop = [target, 'price_per_sqm']  # Don't use price_per_sqm as feature (data leakage)
+# Don't use price_per_sqm directly (data leakage)
+# We'll drop neighborhood_avg_price_per_sqm temporarily and recalculate it properly after train-test split
+features_to_drop = [target, 'price_per_sqm', 'neighborhood_avg_price_per_sqm']
 
 X = df.drop(columns=features_to_drop)
 y = df[target]
@@ -271,6 +397,9 @@ y = df[target]
 print(f"Features (X) shape: {X.shape}")
 print(f"Target (y) shape: {y.shape}")
 print(f"\nFeature columns: {list(X.columns)}")
+
+# Store the neighborhood_avg_price_per_sqm for later (will recalculate after split)
+neighborhood_avg_temp = df['neighborhood_avg_price_per_sqm'].copy()
 
 section_time = time.time() - section_start
 print(f"\n✅ Section 1 completed in {section_time:.1f} seconds ({section_time/60:.1f} minutes)")
@@ -291,11 +420,71 @@ print(f"Training set size: {X_train.shape[0]} samples")
 print(f"Test set size: {X_test.shape[0]} samples")
 print(f"Train/Test split: {X_train.shape[0]/(X_train.shape[0]+X_test.shape[0])*100:.1f}% / {X_test.shape[0]/(X_train.shape[0]+X_test.shape[0])*100:.1f}%")
 
+# Calculate neighborhood average price per sqm ONLY from training data (avoid data leakage)
+print("\n### Calculating neighborhood avg price/sqm (using ONLY training data)...")
+calc_start = time.time()
+
+# Create grid for training data
+grid_size = 0.01
+train_data = pd.DataFrame({
+    'latitude': X_train['latitude'],
+    'longitude': X_train['longitude'],
+    'price': y_train,
+    'area': X_train['area']
+})
+train_data['price_per_sqm'] = train_data['price'] / train_data['area']
+train_data['grid_lat'] = (train_data['latitude'] / grid_size).round() * grid_size
+train_data['grid_lon'] = (train_data['longitude'] / grid_size).round() * grid_size
+train_data['grid_cell'] = train_data['grid_lat'].astype(str) + '_' + train_data['grid_lon'].astype(str)
+
+# Calculate grid averages from training data only
+grid_avg_from_train = train_data.groupby('grid_cell')['price_per_sqm'].mean().to_dict()
+overall_avg = train_data['price_per_sqm'].mean()
+
+def get_neighborhood_avg_safe(lat, lon):
+    """Get neighborhood average from training data, with fallback"""
+    grid_lat = round(lat / grid_size) * grid_size
+    grid_lon = round(lon / grid_size) * grid_size
+    grid_cell = f"{grid_lat}_{grid_lon}"
+    
+    if grid_cell in grid_avg_from_train:
+        return grid_avg_from_train[grid_cell]
+    else:
+        # Fallback: search nearby cells (3x3 grid)
+        nearby_cells = []
+        for dlat in [-grid_size, 0, grid_size]:
+            for dlon in [-grid_size, 0, grid_size]:
+                nearby_cell = f"{grid_lat + dlat}_{grid_lon + dlon}"
+                if nearby_cell in grid_avg_from_train:
+                    nearby_cells.append(grid_avg_from_train[nearby_cell])
+        
+        if nearby_cells:
+            return np.mean(nearby_cells)
+        else:
+            return overall_avg
+
+# Apply to both train and test sets
+X_train['neighborhood_avg_price_per_sqm'] = X_train.apply(
+    lambda row: get_neighborhood_avg_safe(row['latitude'], row['longitude']), axis=1
+)
+X_test['neighborhood_avg_price_per_sqm'] = X_test.apply(
+    lambda row: get_neighborhood_avg_safe(row['latitude'], row['longitude']), axis=1
+)
+
+calc_time = time.time() - calc_start
+print(f"  ✅ Completed in {calc_time:.1f} seconds")
+print(f"  Train mean: ${X_train['neighborhood_avg_price_per_sqm'].mean():,.2f}/m²")
+print(f"  Test mean: ${X_test['neighborhood_avg_price_per_sqm'].mean():,.2f}/m²")
+print(f"  ⚠️  Calculated using ONLY training data to prevent leakage")
+
 # Scale numeric features
 print("\n### Scaling features...")
 numeric_features = ['area', 'balcony_count', 'bathrooms', 'bedrooms', 
                    'latitude', 'longitude', 'distance_to_nearest_subway',
-                   'subway_stations_nearby', 'total_amenities']
+                   'subway_stations_nearby', 'bus_stops_nearby', 'total_amenities',
+                   'neighborhood_avg_price_per_sqm', 'latitude_squared', 
+                   'longitude_squared', 'lat_lon_interaction', 'area_per_bedroom',
+                   'area_per_bathroom', 'bathroom_bedroom_ratio', 'luxury_score']
 
 # Only scale features that exist in the dataset
 numeric_features = [f for f in numeric_features if f in X_train.columns]
@@ -310,6 +499,14 @@ X_test_scaled[numeric_features] = scaler.transform(X_test[numeric_features])
 print(f"Scaled {len(numeric_features)} numeric features")
 print(f"Boolean features preserved as-is")
 
+# Log transform target variable (prices are log-normally distributed)
+print("\n### Log transforming target variable...")
+print(f"  Original price range: ${y_train.min():,.0f} - ${y_train.max():,.0f}")
+y_train_log = np.log1p(y_train)  # log1p(x) = log(1 + x) handles zeros safely
+y_test_log = np.log1p(y_test)
+print(f"  Log-transformed range: {y_train_log.min():.4f} - {y_train_log.max():.4f}")
+print(f"  ℹ️  Training on log-transformed prices (will transform back for RMSE)")
+
 section_time = time.time() - section_start
 print(f"\n✅ Section 2 completed in {section_time:.1f} seconds")
 
@@ -320,7 +517,8 @@ section_start = time.time()
 print("\n### 3. MODEL TRAINING WITH GRIDSEARCHCV")
 print("-" * 80)
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting model training...")
-print(f"Training 3 models: Random Forest, Ridge Regression, SVR")
+print(f"Training 3 models: XGBoost, Ridge Regression, SVR")
+print(f"⚠️  Training on LOG-TRANSFORMED prices")
 print(f"This is the longest step - please be patient!\n")
 
 models = {}
@@ -347,7 +545,7 @@ param_grid_xgb = {
 xgb = XGBRegressor(random_state=42, n_jobs=1)
 grid_xgb = GridSearchCV(xgb, param_grid_xgb, cv=3, scoring='neg_mean_squared_error', 
                         verbose=2, n_jobs=1)
-grid_xgb.fit(X_train_scaled, y_train)
+grid_xgb.fit(X_train_scaled, y_train_log)  # Train on LOG prices
 
 model_time = time.time() - model_start
 models['XGBoost'] = grid_xgb.best_estimator_
@@ -373,14 +571,14 @@ param_grid_ridge = {
 ridge = Ridge(random_state=42)
 grid_ridge = GridSearchCV(ridge, param_grid_ridge, cv=3, scoring='neg_mean_squared_error',
                          verbose=2, n_jobs=1)
-grid_ridge.fit(X_train_scaled, y_train)
+grid_ridge.fit(X_train_scaled, y_train_log)  # Train on LOG prices
 
 model_time = time.time() - model_start
 models['Ridge'] = grid_ridge.best_estimator_
 best_params['Ridge'] = grid_ridge.best_params_
 print(f"\n✅ Ridge Regression completed in {model_time:.1f} seconds")
 print(f"Best parameters: {grid_ridge.best_params_}")
-print(f"Best CV RMSE: ${np.sqrt(-grid_ridge.best_score_):,.2f}")
+print(f"Best CV MSE (log scale): {-grid_ridge.best_score_:.4f}")
 
 # SVR (Support Vector Regressor)
 print(f"\n{'='*60}")
@@ -401,14 +599,14 @@ param_grid_svr = {
 svr = SVR()
 grid_svr = GridSearchCV(svr, param_grid_svr, cv=3, scoring='neg_mean_squared_error',
                        verbose=2, n_jobs=1)
-grid_svr.fit(X_train_scaled, y_train)
+grid_svr.fit(X_train_scaled, y_train_log)  # Train on LOG prices
 
 model_time = time.time() - model_start
 models['SVR'] = grid_svr.best_estimator_
 best_params['SVR'] = grid_svr.best_params_
 print(f"\n✅ SVR completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
 print(f"Best parameters: {grid_svr.best_params_}")
-print(f"Best CV RMSE: ${np.sqrt(-grid_svr.best_score_):,.2f}")
+print(f"Best CV MSE (log scale): {-grid_svr.best_score_:.4f}")
 
 section_time = time.time() - section_start
 print(f"\n{'='*80}")
@@ -426,11 +624,15 @@ print(f"[{datetime.now().strftime('%H:%M:%S')}] Evaluating all models on test se
 results = {}
 
 for name, model in models.items():
-    # Predictions
-    y_train_pred = model.predict(X_train_scaled)
-    y_test_pred = model.predict(X_test_scaled)
+    # Predictions in LOG scale
+    y_train_pred_log = model.predict(X_train_scaled)
+    y_test_pred_log = model.predict(X_test_scaled)
     
-    # Calculate metrics
+    # Transform back from LOG scale to original prices
+    y_train_pred = np.expm1(y_train_pred_log)  # expm1 is inverse of log1p
+    y_test_pred = np.expm1(y_test_pred_log)
+    
+    # Calculate metrics in ORIGINAL price scale
     train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
     test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
     train_r2 = r2_score(y_train, y_train_pred)
