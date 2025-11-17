@@ -634,6 +634,37 @@ best_model_name = min(results.keys(), key=lambda x: results[x]['test_rmse'])
 best_model = models[best_model_name]
 best_results = results[best_model_name]
 
+# Save predictions for residual analysis (Phase 1.1)
+print("\n### Saving predictions for residual analysis...")
+predictions_df = pd.DataFrame({
+    'actual_price': y_test.values,
+    'predicted_price': best_results['predictions'],
+    'residual': y_test.values - best_results['predictions'],
+    'abs_residual': np.abs(y_test.values - best_results['predictions']),
+    'pct_error': (np.abs(y_test.values - best_results['predictions']) / y_test.values) * 100
+})
+
+# Add feature columns for analysis
+for col in X_test.columns:
+    predictions_df[col] = X_test[col].values
+
+# Also add train predictions
+train_predictions_df = pd.DataFrame({
+    'actual_price': y_train.values,
+    'predicted_price': best_model.predict(X_train_scaled),
+    'residual': y_train.values - best_model.predict(X_train_scaled),
+    'abs_residual': np.abs(y_train.values - best_model.predict(X_train_scaled)),
+    'pct_error': (np.abs(y_train.values - best_model.predict(X_train_scaled)) / y_train.values) * 100
+})
+for col in X_train.columns:
+    train_predictions_df[col] = X_train[col].values
+
+os.makedirs('data', exist_ok=True)
+predictions_df.to_csv('data/test_predictions_for_analysis.csv', index=False)
+train_predictions_df.to_csv('data/train_predictions_for_analysis.csv', index=False)
+print(f"✅ Saved test predictions to: data/test_predictions_for_analysis.csv")
+print(f"✅ Saved train predictions to: data/train_predictions_for_analysis.csv")
+
 print(f"\n🏆 BEST MODEL: {best_model_name}")
 print(f"   Test RMSE: ${best_results['test_rmse']:,.2f}")
 print(f"   Test R²:   {best_results['test_r2']:.4f}")
