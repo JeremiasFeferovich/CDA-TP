@@ -15,14 +15,16 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.svm import SVR
+from sklearn.cluster import KMeans
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
+from catboost import CatBoostRegressor
 import joblib
 import os
 from datetime import datetime
@@ -207,6 +209,15 @@ def count_bus_stops_nearby(lat, lon, radius_km=0.5):
     
     return int(np.sum(distances <= radius_km))
 
+def calculate_distance_to_city_center(lat, lon):
+    """Calculate distance to Plaza de Mayo (city center) in km"""
+    if pd.isna(lat) or pd.isna(lon):
+        return np.nan
+    # Plaza de Mayo coordinates (approximate city center)
+    city_center_lat = -34.6083
+    city_center_lon = -58.3712
+    return haversine(lon, lat, city_center_lon, city_center_lat)
+
 # ============================================================================
 # 1. DATA LOADING AND FEATURE ENGINEERING
 # ============================================================================
@@ -241,17 +252,18 @@ after_min_filter = len(df)
 print(f"  Removed {before_min_filter - after_min_filter:,} properties ({(before_min_filter - after_min_filter)/before_min_filter*100:.1f}%)")
 print(f"  Remaining: {after_min_filter:,} properties")
 
-# **NEW: Filter out properties > $700K**
-print(f"\n### Filtering properties > $700,000...")
+# **PHASE 1: Narrow price range to 30k-350k for RMSE < 20K target**
+print(f"\n### Filtering properties > $350,000...")
 before_max_filter = len(df)
-df = df[df['price'] <= 700_000].copy()
+df = df[df['price'] <= 350_000].copy()
 after_max_filter = len(df)
 print(f"  Removed {before_max_filter - after_max_filter:,} properties ({(before_max_filter - after_max_filter)/before_max_filter*100:.1f}%)")
 print(f"  Remaining: {after_max_filter:,} properties")
 print(f"  Final price range: ${df['price'].min():,.0f} - ${df['price'].max():,.0f}")
 
 # Drop currency column after filtering
-df = df.drop(columns=['currency'])
+if 'currency' in df.columns:
+    df = df.drop(columns=['currency'])
 
 # Create derived features
 print("\n### Creating derived features...")
@@ -357,10 +369,147 @@ amenity_cols = [col for col in df.columns if col.startswith('has_')]
 df['total_amenities'] = df[amenity_cols].sum(axis=1)
 print(f"Created 'total_amenities' feature from {len(amenity_cols)} amenity columns")
 
+# 7. PHASE 3.1: Interaction Features
+print("\n### Phase 3.1: Creating interaction features...")
+# Area interactions
+df['area_bathrooms'] = df['area'] * df['bathrooms']
+df['area_bedrooms'] = df['area'] * df['bedrooms']
+df['bathrooms_bedrooms'] = df['bathrooms'] * df['bedrooms']
+print(f"Created area*bathrooms, area*bedrooms, bathrooms*bedrooms")
+
+# Location interactions
+if 'distance_to_nearest_subway' in df.columns:
+    df['area_subway_dist'] = df['area'] * df['distance_to_nearest_subway']
+    df['subway_bus_stops'] = df['subway_stations_nearby'] * df['bus_stops_nearby']
+    print(f"Created area*subway_dist, subway*bus_stops")
+
+# Neighborhood interactions
+if 'neighborhood_avg_price_per_sqm' in df.columns:
+    df['area_neighborhood_price'] = df['area'] * df['neighborhood_avg_price_per_sqm']
+    print(f"Created area*neighborhood_price")
+
+# Amenity interactions
+if 'total_amenities' in df.columns:
+    df['area_amenities'] = df['area'] * df['total_amenities']
+    print(f"Created area*amenities")
+
+print(f"✅ Created {len([c for c in df.columns if any(x in c for x in ['area_bathrooms', 'area_bedrooms', 'bathrooms_bedrooms', 'area_subway', 'subway_bus', 'area_amenities'])])} interaction features")
+
+# 8. PHASE 3.1: Advanced Location Features
+print("\n### Phase 3.1: Creating advanced location features...")
+
+# Distance to city center (Plaza de Mayo)
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Calculating distance to city center...")
+calc_start = time.time()
+df['distance_to_city_center'] = df.apply(
+    lambda row: calculate_distance_to_city_center(row['latitude'], row['longitude']),
+    axis=1
+)
+calc_time = time.time() - calc_start
+print(f"  ✅ Completed in {calc_time:.1f} seconds")
+print(f"  Mean distance: {df['distance_to_city_center'].mean():.3f} km")
+
+# Property quality score (weighted sum of features)
+print(f"Creating property quality score...")
+# Weight different amenities differently
+amenity_weights = {
+    'has_garage': 2.0,
+    'has_doorman': 1.5,
+    'has_gym': 1.5,
+    'has_pool': 2.0,
+    'has_security': 1.5,
+    'has_terrace': 1.0,
+    'has_balcony': 0.5,
+    'has_grill': 0.5,
+    'has_storage': 0.5,
+    'has_sum': 0.5,
+}
+
+df['property_quality_score'] = 0
+for amenity, weight in amenity_weights.items():
+    if amenity in df.columns:
+        df['property_quality_score'] += df[amenity] * weight
+
+# Add size score
+df['size_score'] = df['area'] * df['bathrooms'] * df['bedrooms'] / 100  # Normalize
+df['property_quality_score'] += df['size_score']
+
+print(f"  Created property_quality_score feature")
+print(f"  Mean quality score: {df['property_quality_score'].mean():.2f}")
+
+# 9. PHASE 3: Aggressive Feature Engineering for RMSE < 20K target
+print("\n### Phase 3: Creating polynomial and advanced features...")
+
+# 9.1 Polynomial Features
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Creating polynomial features...")
+df['area_squared'] = df['area'] ** 2
+df['area_cubed'] = df['area'] ** 3
+df['bathrooms_squared'] = df['bathrooms'] ** 2
+df['bedrooms_squared'] = df['bedrooms'] ** 2
+print(f"  Created area², area³, bathrooms², bedrooms²")
+
+# 9.2 Ratio Features
+print(f"Creating ratio features...")
+df['area_per_bathroom'] = df['area'] / (df['bathrooms'] + 0.01)  # Add small value to avoid division by zero
+df['area_per_bedroom'] = df['area'] / (df['bedrooms'] + 0.01)
+df['bathrooms_per_bedroom'] = df['bathrooms'] / (df['bedrooms'] + 0.01)
+print(f"  Created area/bathrooms, area/bedrooms, bathrooms/bedrooms")
+
+# 9.3 Additional Interaction Features
+print(f"Creating additional interaction features...")
+df['area_squared_bathrooms'] = df['area_squared'] * df['bathrooms']
+df['area_squared_bedrooms'] = df['area_squared'] * df['bedrooms']
+if 'distance_to_city_center' in df.columns:
+    df['distance_city_center_area'] = df['distance_to_city_center'] * df['area']
+if 'property_quality_score' in df.columns:
+    df['quality_score_area'] = df['property_quality_score'] * df['area']
+print(f"  Created area²*bathrooms, area²*bedrooms, distance_city_center*area, quality_score*area")
+
+# 9.4 Location Clustering
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Creating location clusters using KMeans...")
+calc_start = time.time()
+# Filter out NaN coordinates for clustering
+valid_coords = df[['latitude', 'longitude']].dropna()
+if len(valid_coords) > 0:
+    # Use 8 clusters for neighborhood segmentation
+    n_clusters = 8
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    df['location_cluster'] = np.nan
+    df.loc[valid_coords.index, 'location_cluster'] = kmeans.fit_predict(valid_coords)
+    
+    # Calculate distance to each cluster centroid
+    cluster_centers = kmeans.cluster_centers_
+    for i in range(n_clusters):
+        # Calculate distance to cluster center i
+        def dist_to_cluster_i(lat, lon, center_idx):
+            if pd.isna(lat) or pd.isna(lon):
+                return np.nan
+            return haversine(lon, lat, cluster_centers[center_idx][1], cluster_centers[center_idx][0])
+        
+        df[f'distance_to_cluster_{i}'] = df.apply(
+            lambda row: dist_to_cluster_i(row['latitude'], row['longitude'], i), axis=1
+        )
+    
+    print(f"  Created location_cluster feature with {n_clusters} clusters")
+    print(f"  Created distance_to_cluster_0 to distance_to_cluster_{n_clusters-1} features")
+    print(f"  Cluster distribution:")
+    cluster_counts = df['location_cluster'].value_counts().sort_index()
+    for cluster_id, count in cluster_counts.items():
+        print(f"    Cluster {int(cluster_id)}: {count:,} properties")
+else:
+    print(f"  ⚠️  No valid coordinates for clustering")
+    df['location_cluster'] = 0
+
+calc_time = time.time() - calc_start
+print(f"  ✅ Completed in {calc_time:.1f} seconds")
+
 # Remove rows with NaN values in critical features
 print("\n### Cleaning data...")
 before_clean = len(df)
 df = df.dropna(subset=['latitude', 'longitude', 'distance_to_nearest_subway'])
+# Fill any remaining NaN in location_cluster (shouldn't happen after dropping lat/lon NaN, but just in case)
+if 'location_cluster' in df.columns:
+    df['location_cluster'] = df['location_cluster'].fillna(0)
 after_clean = len(df)
 print(f"Removed {before_clean - after_clean} rows with NaN in critical features")
 print(f"Final dataset shape: {df.shape}")
@@ -400,6 +549,15 @@ X_train, X_test, y_train, y_test = train_test_split(
 print(f"Training set size: {X_train.shape[0]} samples")
 print(f"Test set size: {X_test.shape[0]} samples")
 print(f"Train/Test split: {X_train.shape[0]/(X_train.shape[0]+X_test.shape[0])*100:.1f}% / {X_test.shape[0]/(X_train.shape[0]+X_test.shape[0])*100:.1f}%")
+
+# PHASE 2: Remove Log Transformation (previous tests showed it performed worse)
+print("\n### Phase 2: Training on Original Scale")
+print("  Using original price scale (no log transformation)")
+print("  Previous tests showed log transformation performed worse for this dataset")
+y_train_original = y_train.copy()
+y_test_original = y_test.copy()
+print(f"  Price range: ${y_train_original.min():,.0f} - ${y_train_original.max():,.0f}")
+print(f"  Using original scale targets for training")
 
 # Calculate neighborhood average price per sqm ONLY from training data (avoid data leakage)
 print("\n### Calculating neighborhood avg price/sqm (using ONLY training data)...")
@@ -458,6 +616,12 @@ print(f"  Train mean: ${X_train['neighborhood_avg_price_per_sqm'].mean():,.2f}/m
 print(f"  Test mean: ${X_test['neighborhood_avg_price_per_sqm'].mean():,.2f}/m²")
 print(f"  ⚠️  Calculated using ONLY training data to prevent leakage")
 
+# Create neighborhood interaction feature after split (to avoid leakage)
+print("\n### Creating neighborhood interaction feature...")
+X_train['area_neighborhood_price'] = X_train['area'] * X_train['neighborhood_avg_price_per_sqm']
+X_test['area_neighborhood_price'] = X_test['area'] * X_test['neighborhood_avg_price_per_sqm']
+print(f"  Created area*neighborhood_price feature")
+
 # Scale numeric features
 print("\n### Scaling features...")
 numeric_features = ['area', 'balcony_count', 'bathrooms', 'bedrooms', 
@@ -465,8 +629,31 @@ numeric_features = ['area', 'balcony_count', 'bathrooms', 'bedrooms',
                    'subway_stations_nearby', 'bus_stops_nearby', 'total_amenities',
                    'neighborhood_avg_price_per_sqm']
 
-# Only scale features that exist in the dataset
-numeric_features = [f for f in numeric_features if f in X_train.columns]
+# Add interaction features to scaling list
+interaction_feature_names = ['area_bathrooms', 'area_bedrooms', 'bathrooms_bedrooms',
+                            'area_subway_dist', 'subway_bus_stops', 
+                            'area_neighborhood_price', 'area_amenities']
+numeric_features.extend(interaction_feature_names)
+
+# Add advanced features to scaling list
+advanced_features = ['distance_to_city_center', 'property_quality_score', 'size_score']
+numeric_features.extend(advanced_features)
+
+# Add polynomial features to scaling list
+polynomial_features = ['area_squared', 'area_cubed', 'bathrooms_squared', 'bedrooms_squared',
+                       'area_per_bathroom', 'area_per_bedroom', 'bathrooms_per_bedroom',
+                       'area_squared_bathrooms', 'area_squared_bedrooms',
+                       'distance_city_center_area', 'quality_score_area']
+numeric_features.extend(polynomial_features)
+
+# Add location cluster distance features
+cluster_distance_features = [f for f in X_train.columns if f.startswith('distance_to_cluster_')]
+numeric_features.extend(cluster_distance_features)
+
+# Only scale features that exist in the dataset and are numeric (exclude location_cluster which is categorical)
+numeric_features = [f for f in numeric_features if f in X_train.columns and f != 'location_cluster']
+print(f"Scaling {len(numeric_features)} numeric features (including polynomial and cluster distance features)")
+print(f"Note: location_cluster is categorical and will not be scaled")
 
 scaler = StandardScaler()
 X_train_scaled = X_train.copy()
@@ -482,40 +669,48 @@ section_time = time.time() - section_start
 print(f"\n✅ Section 2 completed in {section_time:.1f} seconds")
 
 # ============================================================================
-# 3. MODEL TRAINING WITH GRIDSEARCHCV
+# 3. MODEL TRAINING WITH ENSEMBLE (XGBoost + LightGBM + CatBoost)
 # ============================================================================
 section_start = time.time()
-print("\n### 3. MODEL TRAINING WITH GRIDSEARCHCV")
+print("\n### 3. MODEL TRAINING WITH ENSEMBLE METHODS")
 print("-" * 80)
-print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting model training...")
-print(f"Training 1 model: XGBoost (Ridge and SVR commented out)")
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting ensemble model training...")
+print(f"Training 3 models: XGBoost, LightGBM, CatBoost")
 print(f"This is the longest step - please be patient!\n")
 
 models = {}
 best_params = {}
 
-# **PRIMARY: XGBoost (replaces Random Forest)**
+# **MODEL 1: XGBoost**
 print(f"\n{'='*60}")
-print(f"MODEL: XGBoost (Only Model - Ridge and SVR commented out)")
+print(f"MODEL 1/3: XGBoost")
 print(f"{'='*60}")
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
-print(f"Hyperparameter grid: 18 combinations × 3 folds = 54 fits")
-print(f"Estimated time: 3-5 minutes")
+print(f"Using RandomizedSearchCV: 50 iterations × 5 folds = 250 fits")
+print(f"Hyperparameter grid optimized for 30k-350k price range")
+print(f"Estimated time: 8-12 minutes")
 print(f"{'='*60}\n")
 
 model_start = time.time()
+# PHASE 5: Expanded hyperparameter grid for narrow price range
 param_grid_xgb = {
-    'n_estimators': [100, 200, 300],
-    'max_depth': [3, 5, 7],
-    'learning_rate': [0.05, 0.1],
-    'subsample': [0.8, 0.9],
-    'colsample_bytree': [0.8, 0.9],
+    'n_estimators': [300, 500, 700],
+    'max_depth': [6, 8, 10],
+    'learning_rate': [0.01, 0.03, 0.05, 0.1],
+    'subsample': [0.8, 0.9, 1.0],
+    'colsample_bytree': [0.8, 0.9, 1.0],
+    'min_child_weight': [1, 3, 5],
+    'reg_alpha': [0, 0.1, 0.5],
+    'reg_lambda': [1, 1.5, 2],
+    'gamma': [0, 0.1, 0.2],
 }
 
 xgb = XGBRegressor(random_state=42, n_jobs=1)
-grid_xgb = GridSearchCV(xgb, param_grid_xgb, cv=3, scoring='neg_mean_squared_error', 
-                        verbose=2, n_jobs=1)
-grid_xgb.fit(X_train_scaled, y_train)
+grid_xgb = RandomizedSearchCV(xgb, param_grid_xgb, n_iter=50, cv=5, 
+                              scoring='neg_mean_squared_error', 
+                              verbose=2, n_jobs=1, random_state=42)
+# Train on original scale (no log transformation)
+grid_xgb.fit(X_train_scaled, y_train_original)
 
 model_time = time.time() - model_start
 models['XGBoost'] = grid_xgb.best_estimator_
@@ -523,6 +718,73 @@ best_params['XGBoost'] = grid_xgb.best_params_
 print(f"\n✅ XGBoost completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
 print(f"Best parameters: {grid_xgb.best_params_}")
 print(f"Best CV MSE: {-grid_xgb.best_score_:.4f}")
+
+# **MODEL 2: LightGBM**
+print(f"\n{'='*60}")
+print(f"MODEL 2/3: LightGBM")
+print(f"{'='*60}")
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
+print(f"Using RandomizedSearchCV: 50 iterations × 5 folds = 250 fits")
+print(f"Estimated time: 5-8 minutes")
+print(f"{'='*60}\n")
+
+model_start = time.time()
+param_grid_lgb = {
+    'n_estimators': [300, 500, 700],
+    'max_depth': [6, 8, 10, -1],  # -1 means no limit
+    'learning_rate': [0.01, 0.03, 0.05, 0.1],
+    'subsample': [0.8, 0.9, 1.0],
+    'colsample_bytree': [0.8, 0.9, 1.0],
+    'min_child_samples': [20, 30, 50],
+    'reg_alpha': [0, 0.1, 0.5],
+    'reg_lambda': [0, 0.1, 1],
+    'num_leaves': [31, 50, 70],
+}
+
+lgb = LGBMRegressor(random_state=42, n_jobs=1, verbose=-1)
+grid_lgb = RandomizedSearchCV(lgb, param_grid_lgb, n_iter=50, cv=5,
+                               scoring='neg_mean_squared_error',
+                               verbose=2, n_jobs=1, random_state=42)
+grid_lgb.fit(X_train_scaled, y_train_original)
+
+model_time = time.time() - model_start
+models['LightGBM'] = grid_lgb.best_estimator_
+best_params['LightGBM'] = grid_lgb.best_params_
+print(f"\n✅ LightGBM completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
+print(f"Best parameters: {grid_lgb.best_params_}")
+print(f"Best CV MSE: {-grid_lgb.best_score_:.4f}")
+
+# **MODEL 3: CatBoost**
+print(f"\n{'='*60}")
+print(f"MODEL 3/3: CatBoost")
+print(f"{'='*60}")
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
+print(f"Using RandomizedSearchCV: 50 iterations × 5 folds = 250 fits")
+print(f"Estimated time: 10-15 minutes")
+print(f"{'='*60}\n")
+
+model_start = time.time()
+param_grid_cat = {
+    'iterations': [300, 500, 700],
+    'depth': [6, 8, 10],
+    'learning_rate': [0.01, 0.03, 0.05, 0.1],
+    'l2_leaf_reg': [1, 3, 5],
+    'random_strength': [0, 0.5, 1],
+    'bagging_temperature': [0, 0.5, 1],
+}
+
+cat = CatBoostRegressor(random_state=42, verbose=False, thread_count=1)
+grid_cat = RandomizedSearchCV(cat, param_grid_cat, n_iter=50, cv=5,
+                              scoring='neg_mean_squared_error',
+                              verbose=2, n_jobs=1, random_state=42)
+grid_cat.fit(X_train_scaled, y_train_original)
+
+model_time = time.time() - model_start
+models['CatBoost'] = grid_cat.best_estimator_
+best_params['CatBoost'] = grid_cat.best_params_
+print(f"\n✅ CatBoost completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
+print(f"Best parameters: {grid_cat.best_params_}")
+print(f"Best CV MSE: {-grid_cat.best_score_:.4f}")
 
 # Ridge Regression - COMMENTED OUT (only running XGBoost)
 # print(f"\n{'='*60}")
@@ -593,18 +855,19 @@ print(f"[{datetime.now().strftime('%H:%M:%S')}] Evaluating all models on test se
 
 results = {}
 
+# Evaluate individual models
 for name, model in models.items():
-    # Predictions
+    # Predictions on original scale (no log transformation)
     y_train_pred = model.predict(X_train_scaled)
     y_test_pred = model.predict(X_test_scaled)
     
     # Calculate metrics
-    train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
-    test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
-    train_r2 = r2_score(y_train, y_train_pred)
-    test_r2 = r2_score(y_test, y_test_pred)
-    train_mae = mean_absolute_error(y_train, y_train_pred)
-    test_mae = mean_absolute_error(y_test, y_test_pred)
+    train_rmse = np.sqrt(mean_squared_error(y_train_original, y_train_pred))
+    test_rmse = np.sqrt(mean_squared_error(y_test_original, y_test_pred))
+    train_r2 = r2_score(y_train_original, y_train_pred)
+    test_r2 = r2_score(y_test_original, y_test_pred)
+    train_mae = mean_absolute_error(y_train_original, y_train_pred)
+    test_mae = mean_absolute_error(y_test_original, y_test_pred)
     
     results[name] = {
         'train_rmse': train_rmse,
@@ -613,7 +876,8 @@ for name, model in models.items():
         'test_r2': test_r2,
         'train_mae': train_mae,
         'test_mae': test_mae,
-        'predictions': y_test_pred
+        'predictions': y_test_pred,
+        'train_predictions': y_train_pred
     }
     
     print(f"\n{name}:")
@@ -628,20 +892,74 @@ for name, model in models.items():
     rmse_gap = (test_rmse / train_rmse - 1) * 100
     print(f"  Overfitting: {rmse_gap:+.1f}% (test vs train)")
 
-# Select best model based on lowest test RMSE and highest test R²
+# PHASE 4: Ensemble Predictions (Weighted Average)
+print("\n" + "="*60)
+print("ENSEMBLE: Weighted Average of All Models")
+print("="*60)
+
+# Calculate weights based on inverse RMSE (lower RMSE = higher weight)
+test_rmses = [results[name]['test_rmse'] for name in models.keys()]
+weights = [1.0 / rmse for rmse in test_rmses]
+weights = np.array(weights) / np.sum(weights)  # Normalize to sum to 1
+
+print(f"\nEnsemble weights:")
+for name, weight in zip(models.keys(), weights):
+    print(f"  {name}: {weight:.3f}")
+
+# Generate ensemble predictions
+y_train_pred_ensemble = np.zeros(len(y_train_original))
+y_test_pred_ensemble = np.zeros(len(y_test_original))
+
+for name, weight in zip(models.keys(), weights):
+    y_train_pred_ensemble += weight * results[name]['train_predictions']
+    y_test_pred_ensemble += weight * results[name]['predictions']
+
+# Calculate ensemble metrics
+ensemble_train_rmse = np.sqrt(mean_squared_error(y_train_original, y_train_pred_ensemble))
+ensemble_test_rmse = np.sqrt(mean_squared_error(y_test_original, y_test_pred_ensemble))
+ensemble_train_r2 = r2_score(y_train_original, y_train_pred_ensemble)
+ensemble_test_r2 = r2_score(y_test_original, y_test_pred_ensemble)
+ensemble_train_mae = mean_absolute_error(y_train_original, y_train_pred_ensemble)
+ensemble_test_mae = mean_absolute_error(y_test_original, y_test_pred_ensemble)
+
+results['Ensemble'] = {
+    'train_rmse': ensemble_train_rmse,
+    'test_rmse': ensemble_test_rmse,
+    'train_r2': ensemble_train_r2,
+    'test_r2': ensemble_test_r2,
+    'train_mae': ensemble_train_mae,
+    'test_mae': ensemble_test_mae,
+    'predictions': y_test_pred_ensemble,
+    'train_predictions': y_train_pred_ensemble,
+    'weights': dict(zip(models.keys(), weights))
+}
+
+print(f"\nEnsemble Results:")
+print(f"  Train RMSE: ${ensemble_train_rmse:,.2f}")
+print(f"  Test RMSE:  ${ensemble_test_rmse:,.2f}")
+print(f"  Train R²:   {ensemble_train_r2:.4f}")
+print(f"  Test R²:    {ensemble_test_r2:.4f}")
+print(f"  Train MAE:  ${ensemble_train_mae:,.2f}")
+print(f"  Test MAE:   ${ensemble_test_mae:,.2f}")
+
+# Select best model (ensemble or individual)
 print("\n### Selecting best model...")
 best_model_name = min(results.keys(), key=lambda x: results[x]['test_rmse'])
-best_model = models[best_model_name]
+if best_model_name == 'Ensemble':
+    # For ensemble, we'll create a wrapper that combines models
+    best_model = {'type': 'ensemble', 'models': models, 'weights': weights}
+else:
+    best_model = models[best_model_name]
 best_results = results[best_model_name]
 
 # Save predictions for residual analysis (Phase 1.1)
 print("\n### Saving predictions for residual analysis...")
 predictions_df = pd.DataFrame({
-    'actual_price': y_test.values,
+    'actual_price': y_test_original.values,
     'predicted_price': best_results['predictions'],
-    'residual': y_test.values - best_results['predictions'],
-    'abs_residual': np.abs(y_test.values - best_results['predictions']),
-    'pct_error': (np.abs(y_test.values - best_results['predictions']) / y_test.values) * 100
+    'residual': y_test_original.values - best_results['predictions'],
+    'abs_residual': np.abs(y_test_original.values - best_results['predictions']),
+    'pct_error': (np.abs(y_test_original.values - best_results['predictions']) / y_test_original.values) * 100
 })
 
 # Add feature columns for analysis
@@ -649,12 +967,16 @@ for col in X_test.columns:
     predictions_df[col] = X_test[col].values
 
 # Also add train predictions
+if best_model_name == 'Ensemble':
+    y_train_pred_original = best_results['train_predictions']
+else:
+    y_train_pred_original = best_model.predict(X_train_scaled)
 train_predictions_df = pd.DataFrame({
-    'actual_price': y_train.values,
-    'predicted_price': best_model.predict(X_train_scaled),
-    'residual': y_train.values - best_model.predict(X_train_scaled),
-    'abs_residual': np.abs(y_train.values - best_model.predict(X_train_scaled)),
-    'pct_error': (np.abs(y_train.values - best_model.predict(X_train_scaled)) / y_train.values) * 100
+    'actual_price': y_train_original.values,
+    'predicted_price': y_train_pred_original,
+    'residual': y_train_original.values - y_train_pred_original,
+    'abs_residual': np.abs(y_train_original.values - y_train_pred_original),
+    'pct_error': (np.abs(y_train_original.values - y_train_pred_original) / y_train_original.values) * 100
 })
 for col in X_train.columns:
     train_predictions_df[col] = X_train[col].values
@@ -695,25 +1017,27 @@ print(f"[{datetime.now().strftime('%H:%M:%S')}] Generating plots...")
 # Create output directory
 os.makedirs('data', exist_ok=True)
 
-# 1. Feature Importance (for XGBoost/tree-based models)
-if best_model_name == 'XGBoost' or 'XGBoost' in models:
+# 1. Feature Importance (for tree-based models)
+if best_model_name == 'Ensemble' or 'XGBoost' in models:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Creating feature importance plot...")
-    xgb_model = models.get('XGBoost', best_model)
-    if hasattr(xgb_model, 'feature_importances_'):
-        feature_importance = pd.DataFrame({
-            'feature': X_train_scaled.columns,
-            'importance': xgb_model.feature_importances_
-        }).sort_values('importance', ascending=False).head(15)
-        
-        plt.figure(figsize=(12, 8))
-        plt.barh(feature_importance['feature'], feature_importance['importance'])
-        plt.xlabel('Importance')
-        plt.title('Top 15 Feature Importances (XGBoost)')
-        plt.gca().invert_yaxis()
-        plt.tight_layout()
-        plt.savefig('data/feature_importance.png', dpi=300, bbox_inches='tight')
-        plt.close()
-        print("  ✅ Saved: data/feature_importance.png")
+    # Use XGBoost for feature importance (or ensemble average if available)
+    if 'XGBoost' in models:
+        xgb_model = models['XGBoost']
+        if hasattr(xgb_model, 'feature_importances_'):
+            feature_importance = pd.DataFrame({
+                'feature': X_train_scaled.columns,
+                'importance': xgb_model.feature_importances_
+            }).sort_values('importance', ascending=False).head(15)
+            
+            plt.figure(figsize=(12, 8))
+            plt.barh(feature_importance['feature'], feature_importance['importance'])
+            plt.xlabel('Importance')
+            plt.title('Top 15 Feature Importances (XGBoost)')
+            plt.gca().invert_yaxis()
+            plt.tight_layout()
+            plt.savefig('data/feature_importance.png', dpi=300, bbox_inches='tight')
+            plt.close()
+            print("  ✅ Saved: data/feature_importance.png")
 
 # 2. Predicted vs Actual scatter plot
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Creating predicted vs actual plot...")
@@ -812,10 +1136,26 @@ print(f"[{datetime.now().strftime('%H:%M:%S')}] Saving models and generating rep
 # Create models directory
 os.makedirs('models', exist_ok=True)
 
-# Save best model
-model_path = 'models/best_property_price_model.joblib'
-joblib.dump(best_model, model_path)
-print(f"✅ Saved best model: {model_path}")
+# Save best model(s)
+if best_model_name == 'Ensemble':
+    # Save all models and weights for ensemble
+    ensemble_path = 'models/ensemble_models.joblib'
+    ensemble_data = {
+        'models': models,
+        'weights': weights,
+        'scaler': scaler
+    }
+    joblib.dump(ensemble_data, ensemble_path)
+    print(f"✅ Saved ensemble models: {ensemble_path}")
+    # Also save individual best model for compatibility
+    best_individual = min(models.keys(), key=lambda x: results[x]['test_rmse'])
+    model_path = 'models/best_property_price_model.joblib'
+    joblib.dump(models[best_individual], model_path)
+    print(f"✅ Saved best individual model ({best_individual}): {model_path}")
+else:
+    model_path = 'models/best_property_price_model.joblib'
+    joblib.dump(best_model, model_path)
+    print(f"✅ Saved best model: {model_path}")
 
 # Save scaler
 scaler_path = 'models/scaler.joblib'
@@ -851,7 +1191,10 @@ with open(report_path, 'w') as f:
     
     for name in results.keys():
         f.write(f"{name}:\n")
-        f.write(f"  Best parameters: {best_params[name]}\n")
+        if name in best_params:
+            f.write(f"  Best parameters: {best_params[name]}\n")
+        if name == 'Ensemble' and 'weights' in results[name]:
+            f.write(f"  Ensemble weights: {results[name]['weights']}\n")
         f.write(f"  Train RMSE: ${results[name]['train_rmse']:,.2f}\n")
         f.write(f"  Test RMSE:  ${results[name]['test_rmse']:,.2f}\n")
         f.write(f"  Train R²:   {results[name]['train_r2']:.4f}\n")
@@ -863,7 +1206,10 @@ with open(report_path, 'w') as f:
     f.write("BEST MODEL\n")
     f.write("-" * 80 + "\n")
     f.write(f"Selected model: {best_model_name}\n")
-    f.write(f"Best parameters: {best_params[best_model_name]}\n")
+    if best_model_name in best_params:
+        f.write(f"Best parameters: {best_params[best_model_name]}\n")
+    if best_model_name == 'Ensemble' and 'weights' in best_results:
+        f.write(f"Ensemble weights: {best_results['weights']}\n")
     f.write(f"Test RMSE: ${best_results['test_rmse']:,.2f}\n")
     f.write(f"Test R²:   {best_results['test_r2']:.4f}\n")
     f.write(f"Test MAE:  ${best_results['test_mae']:,.2f}\n\n")
