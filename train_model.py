@@ -24,6 +24,13 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
+import lightgbm as lgb
+try:
+    from lightgbm import early_stopping, log_evaluation
+except ImportError:
+    # Fallback for older versions
+    early_stopping = None
+    log_evaluation = None
 from catboost import CatBoostRegressor
 import joblib
 import os
@@ -443,10 +450,9 @@ print("\n### Phase 3: Creating polynomial and advanced features...")
 # 9.1 Polynomial Features
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Creating polynomial features...")
 df['area_squared'] = df['area'] ** 2
-df['area_cubed'] = df['area'] ** 3
 df['bathrooms_squared'] = df['bathrooms'] ** 2
 df['bedrooms_squared'] = df['bedrooms'] ** 2
-print(f"  Created area², area³, bathrooms², bedrooms²")
+print(f"  Created area², bathrooms², bedrooms")
 
 # 9.2 Ratio Features
 print(f"Creating ratio features...")
@@ -542,34 +548,40 @@ print("\n### 2. TRAIN-TEST SPLIT")
 print("-" * 80)
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Splitting data into train and test sets...")
 
-X_train, X_test, y_train, y_test = train_test_split(
+X_train_full, X_test, y_train_full, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
+# Split training data into train and validation sets for early stopping
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train_full, y_train_full, test_size=0.15, random_state=42
+)
+
 print(f"Training set size: {X_train.shape[0]} samples")
+print(f"Validation set size: {X_val.shape[0]} samples")
 print(f"Test set size: {X_test.shape[0]} samples")
-print(f"Train/Test split: {X_train.shape[0]/(X_train.shape[0]+X_test.shape[0])*100:.1f}% / {X_test.shape[0]/(X_train.shape[0]+X_test.shape[0])*100:.1f}%")
+print(f"Train/Val/Test split: {X_train.shape[0]/(X_train.shape[0]+X_val.shape[0]+X_test.shape[0])*100:.1f}% / {X_val.shape[0]/(X_train.shape[0]+X_val.shape[0]+X_test.shape[0])*100:.1f}% / {X_test.shape[0]/(X_train.shape[0]+X_val.shape[0]+X_test.shape[0])*100:.1f}%")
 
 # PHASE 2: Remove Log Transformation (previous tests showed it performed worse)
 print("\n### Phase 2: Training on Original Scale")
 print("  Using original price scale (no log transformation)")
 print("  Previous tests showed log transformation performed worse for this dataset")
-y_train_original = y_train.copy()
-y_test_original = y_test.copy()
-print(f"  Price range: ${y_train_original.min():,.0f} - ${y_train_original.max():,.0f}")
+print(f"  Train price range: ${y_train.min():,.0f} - ${y_train.max():,.0f}")
+print(f"  Val price range: ${y_val.min():,.0f} - ${y_val.max():,.0f}")
+print(f"  Test price range: ${y_test.min():,.0f} - ${y_test.max():,.0f}")
 print(f"  Using original scale targets for training")
 
 # Calculate neighborhood average price per sqm ONLY from training data (avoid data leakage)
 print("\n### Calculating neighborhood avg price/sqm (using ONLY training data)...")
 calc_start = time.time()
 
-# Create grid for training data
+# Create grid for training data (use full training set including validation for neighborhood averages)
 grid_size = 0.01
 train_data = pd.DataFrame({
-    'latitude': X_train['latitude'],
-    'longitude': X_train['longitude'],
-    'price': y_train,
-    'area': X_train['area']
+    'latitude': X_train_full['latitude'],
+    'longitude': X_train_full['longitude'],
+    'price': y_train_full,
+    'area': X_train_full['area']
 })
 train_data['price_per_sqm'] = train_data['price'] / train_data['area']
 train_data['grid_lat'] = (train_data['latitude'] / grid_size).round() * grid_size
@@ -602,8 +614,11 @@ def get_neighborhood_avg_safe(lat, lon):
         else:
             return overall_avg
 
-# Apply to both train and test sets
+# Apply to train, validation, and test sets
 X_train['neighborhood_avg_price_per_sqm'] = X_train.apply(
+    lambda row: get_neighborhood_avg_safe(row['latitude'], row['longitude']), axis=1
+)
+X_val['neighborhood_avg_price_per_sqm'] = X_val.apply(
     lambda row: get_neighborhood_avg_safe(row['latitude'], row['longitude']), axis=1
 )
 X_test['neighborhood_avg_price_per_sqm'] = X_test.apply(
@@ -619,6 +634,7 @@ print(f"  ⚠️  Calculated using ONLY training data to prevent leakage")
 # Create neighborhood interaction feature after split (to avoid leakage)
 print("\n### Creating neighborhood interaction feature...")
 X_train['area_neighborhood_price'] = X_train['area'] * X_train['neighborhood_avg_price_per_sqm']
+X_val['area_neighborhood_price'] = X_val['area'] * X_val['neighborhood_avg_price_per_sqm']
 X_test['area_neighborhood_price'] = X_test['area'] * X_test['neighborhood_avg_price_per_sqm']
 print(f"  Created area*neighborhood_price feature")
 
@@ -640,7 +656,7 @@ advanced_features = ['distance_to_city_center', 'property_quality_score', 'size_
 numeric_features.extend(advanced_features)
 
 # Add polynomial features to scaling list
-polynomial_features = ['area_squared', 'area_cubed', 'bathrooms_squared', 'bedrooms_squared',
+polynomial_features = ['area_squared', 'bathrooms_squared', 'bedrooms_squared',
                        'area_per_bathroom', 'area_per_bedroom', 'bathrooms_per_bedroom',
                        'area_squared_bathrooms', 'area_squared_bedrooms',
                        'distance_city_center_area', 'quality_score_area']
@@ -657,10 +673,17 @@ print(f"Note: location_cluster is categorical and will not be scaled")
 
 scaler = StandardScaler()
 X_train_scaled = X_train.copy()
+X_val_scaled = X_val.copy()
 X_test_scaled = X_test.copy()
 
 X_train_scaled[numeric_features] = scaler.fit_transform(X_train[numeric_features])
+X_val_scaled[numeric_features] = scaler.transform(X_val[numeric_features])
 X_test_scaled[numeric_features] = scaler.transform(X_test[numeric_features])
+
+# Prepare targets for training (using original scale, no log transformation)
+y_train_original = y_train.copy()
+y_val_original = y_val.copy()
+y_test_original = y_test.copy()
 
 print(f"Scaled {len(numeric_features)} numeric features")
 print(f"Boolean features preserved as-is")
@@ -686,27 +709,28 @@ print(f"\n{'='*60}")
 print(f"MODEL 1/3: XGBoost")
 print(f"{'='*60}")
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
-print(f"Using RandomizedSearchCV: 50 iterations × 5 folds = 250 fits")
-print(f"Hyperparameter grid optimized for 30k-350k price range")
-print(f"Estimated time: 8-12 minutes")
+print(f"Using RandomizedSearchCV: 30 iterations × 5 folds = 150 fits")
+print(f"Hyperparameter grid optimized for 30k-350k price range with regularization")
+print(f"Estimated time: 5-8 minutes")
 print(f"{'='*60}\n")
 
 model_start = time.time()
-# PHASE 5: Expanded hyperparameter grid for narrow price range
+# Updated hyperparameter grid with stronger regularization and reduced complexity to prevent overfitting
+# Reduced grid size for faster training
 param_grid_xgb = {
-    'n_estimators': [300, 500, 700],
-    'max_depth': [6, 8, 10],
-    'learning_rate': [0.01, 0.03, 0.05, 0.1],
+    'n_estimators': [200, 300, 400],  # Reduced from 200-500
+    'max_depth': [4, 5, 6],  # Reduced from 4-7
+    'learning_rate': [0.01, 0.03, 0.05],  # Reduced from 4 to 3 values
     'subsample': [0.8, 0.9, 1.0],
     'colsample_bytree': [0.8, 0.9, 1.0],
-    'min_child_weight': [1, 3, 5],
-    'reg_alpha': [0, 0.1, 0.5],
-    'reg_lambda': [1, 1.5, 2],
-    'gamma': [0, 0.1, 0.2],
+    'min_child_weight': [3, 5],  # Reduced from 3-7
+    'reg_alpha': [0.1, 0.5, 1.0],  # Reduced from 4 to 3 values
+    'reg_lambda': [1.5, 2.0, 3.0],  # Reduced from 4 to 3 values
+    'gamma': [0, 0.1],
 }
 
 xgb = XGBRegressor(random_state=42, n_jobs=1)
-grid_xgb = RandomizedSearchCV(xgb, param_grid_xgb, n_iter=50, cv=5, 
+grid_xgb = RandomizedSearchCV(xgb, param_grid_xgb, n_iter=30, cv=5,  # Reduced for speed: 30 iterations × 5 folds = 150 fits
                               scoring='neg_mean_squared_error', 
                               verbose=2, n_jobs=1, random_state=42)
 # Train on original scale (no log transformation)
@@ -724,25 +748,25 @@ print(f"\n{'='*60}")
 print(f"MODEL 2/3: LightGBM")
 print(f"{'='*60}")
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
-print(f"Using RandomizedSearchCV: 50 iterations × 5 folds = 250 fits")
-print(f"Estimated time: 5-8 minutes")
+print(f"Using RandomizedSearchCV: 30 iterations × 5 folds = 150 fits")
+print(f"Estimated time: 4-6 minutes")
 print(f"{'='*60}\n")
 
 model_start = time.time()
 param_grid_lgb = {
-    'n_estimators': [300, 500, 700],
-    'max_depth': [6, 8, 10, -1],  # -1 means no limit
-    'learning_rate': [0.01, 0.03, 0.05, 0.1],
+    'n_estimators': [200, 300, 400],  # Reduced from 200-500
+    'max_depth': [4, 5, 6],  # Reduced from 4-7
+    'learning_rate': [0.01, 0.03, 0.05],  # Reduced from 4 to 3 values
     'subsample': [0.8, 0.9, 1.0],
     'colsample_bytree': [0.8, 0.9, 1.0],
-    'min_child_samples': [20, 30, 50],
-    'reg_alpha': [0, 0.1, 0.5],
-    'reg_lambda': [0, 0.1, 1],
-    'num_leaves': [31, 50, 70],
+    'min_child_samples': [30, 50],  # Reduced from 3 to 2 values
+    'reg_alpha': [0.1, 0.5, 1.0],  # Kept same
+    'reg_lambda': [0.5, 1.0, 2.0],  # Kept same
+    'num_leaves': [31, 50],  # Reduced from 3 to 2 values
 }
 
 lgb = LGBMRegressor(random_state=42, n_jobs=1, verbose=-1)
-grid_lgb = RandomizedSearchCV(lgb, param_grid_lgb, n_iter=50, cv=5,
+grid_lgb = RandomizedSearchCV(lgb, param_grid_lgb, n_iter=30, cv=5,  # Reduced for speed: 30 iterations × 5 folds = 150 fits
                                scoring='neg_mean_squared_error',
                                verbose=2, n_jobs=1, random_state=42)
 grid_lgb.fit(X_train_scaled, y_train_original)
@@ -759,22 +783,22 @@ print(f"\n{'='*60}")
 print(f"MODEL 3/3: CatBoost")
 print(f"{'='*60}")
 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting training...")
-print(f"Using RandomizedSearchCV: 50 iterations × 5 folds = 250 fits")
-print(f"Estimated time: 10-15 minutes")
+print(f"Using RandomizedSearchCV: 30 iterations × 5 folds = 150 fits")
+print(f"Estimated time: 6-10 minutes")
 print(f"{'='*60}\n")
 
 model_start = time.time()
 param_grid_cat = {
-    'iterations': [300, 500, 700],
-    'depth': [6, 8, 10],
-    'learning_rate': [0.01, 0.03, 0.05, 0.1],
-    'l2_leaf_reg': [1, 3, 5],
+    'iterations': [200, 300, 400],  # Reduced from 200-500
+    'depth': [4, 5, 6],  # Reduced from 4-7
+    'learning_rate': [0.01, 0.03, 0.05],  # Reduced from 4 to 3 values
+    'l2_leaf_reg': [3, 5, 7],  # Reduced from 4 to 3 values
     'random_strength': [0, 0.5, 1],
     'bagging_temperature': [0, 0.5, 1],
 }
 
 cat = CatBoostRegressor(random_state=42, verbose=False, thread_count=1)
-grid_cat = RandomizedSearchCV(cat, param_grid_cat, n_iter=50, cv=5,
+grid_cat = RandomizedSearchCV(cat, param_grid_cat, n_iter=30, cv=5,  # Reduced for speed: 30 iterations × 5 folds = 150 fits
                               scoring='neg_mean_squared_error',
                               verbose=2, n_jobs=1, random_state=42)
 grid_cat.fit(X_train_scaled, y_train_original)
@@ -785,6 +809,160 @@ best_params['CatBoost'] = grid_cat.best_params_
 print(f"\n✅ CatBoost completed in {model_time:.1f} seconds ({model_time/60:.1f} minutes)")
 print(f"Best parameters: {grid_cat.best_params_}")
 print(f"Best CV MSE: {-grid_cat.best_score_:.4f}")
+
+# ============================================================================
+# FEATURE SELECTION BASED ON IMPORTANCE
+# ============================================================================
+print("\n" + "="*80)
+print("FEATURE SELECTION: Analyzing feature importance")
+print("="*80)
+
+# Get feature importance from XGBoost (most reliable)
+if 'XGBoost' in models:
+    xgb_model = models['XGBoost']
+    if hasattr(xgb_model, 'feature_importances_'):
+        feature_importance_df = pd.DataFrame({
+            'feature': X_train_scaled.columns,
+            'importance': xgb_model.feature_importances_
+        }).sort_values('importance', ascending=False)
+        
+        # Calculate cumulative importance
+        feature_importance_df['cumulative_importance'] = feature_importance_df['importance'].cumsum()
+        total_importance = feature_importance_df['importance'].sum()
+        
+        # Select features: keep top features that contribute to 99.5% of total importance
+        # OR remove features with < 0.5% importance (whichever is more restrictive)
+        min_importance_for_995 = feature_importance_df[feature_importance_df['cumulative_importance'] <= 0.995 * total_importance]
+        if len(min_importance_for_995) > 0:
+            min_importance_995 = min_importance_for_995['importance'].min()
+        else:
+            min_importance_995 = 0
+        importance_threshold = max(0.005 * total_importance, min_importance_995)
+        
+        selected_features = feature_importance_df[feature_importance_df['importance'] >= importance_threshold]['feature'].tolist()
+        
+        print(f"\nTotal features: {len(X_train_scaled.columns)}")
+        print(f"Selected features: {len(selected_features)}")
+        print(f"Removed features: {len(X_train_scaled.columns) - len(selected_features)}")
+        print(f"\nTop 10 most important features:")
+        for idx, row in feature_importance_df.head(10).iterrows():
+            print(f"  {row['feature']}: {row['importance']:.6f} ({row['importance']/total_importance*100:.2f}%)")
+        
+        if len(selected_features) < len(X_train_scaled.columns):
+            print(f"\nRemoved low-importance features:")
+            removed_features = feature_importance_df[feature_importance_df['importance'] < importance_threshold]['feature'].tolist()
+            for feat in removed_features[:10]:  # Show first 10
+                print(f"  - {feat}")
+            if len(removed_features) > 10:
+                print(f"  ... and {len(removed_features) - 10} more")
+            
+            # Update feature sets to use only selected features
+            X_train_scaled = X_train_scaled[selected_features]
+            X_val_scaled = X_val_scaled[selected_features]
+            X_test_scaled = X_test_scaled[selected_features]
+            
+            print(f"\n✅ Feature selection complete. Retraining models with {len(selected_features)} features...")
+            
+            # Retrain models with selected features
+            print(f"\n{'='*60}")
+            print("RETRAINING MODELS WITH SELECTED FEATURES")
+            print(f"{'='*60}\n")
+            
+            # Retrain XGBoost
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Retraining XGBoost with selected features...")
+            xgb_best_params = best_params['XGBoost'].copy()
+            xgb_final = XGBRegressor(**xgb_best_params, random_state=42, n_jobs=1)
+            xgb_final.fit(X_train_scaled, y_train_original)
+            models['XGBoost'] = xgb_final
+            print(f"  ✅ XGBoost retrained")
+            
+            # Retrain LightGBM
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Retraining LightGBM with selected features...")
+            lgb_best_params = best_params['LightGBM'].copy()
+            max_rounds = lgb_best_params.pop('n_estimators', 500)
+            lgb_final = LGBMRegressor(**lgb_best_params, n_estimators=max_rounds, random_state=42, n_jobs=1, verbose=-1)
+            # Use callbacks if available, otherwise train without early stopping
+            if early_stopping is not None and log_evaluation is not None:
+                lgb_final.fit(
+                    X_train_scaled, y_train_original,
+                    eval_set=[(X_val_scaled, y_val_original)],
+                    eval_metric='rmse',
+                    callbacks=[early_stopping(stopping_rounds=50, verbose=False), log_evaluation(period=0)]
+                )
+            else:
+                lgb_final.fit(
+                    X_train_scaled, y_train_original,
+                    eval_set=[(X_val_scaled, y_val_original)],
+                    eval_metric='rmse'
+                )
+            models['LightGBM'] = lgb_final
+            print(f"  ✅ LightGBM retrained")
+            
+            # Retrain CatBoost
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Retraining CatBoost with selected features...")
+            cat_best_params = best_params['CatBoost'].copy()
+            max_iterations = cat_best_params.pop('iterations', 500)
+            cat_final = CatBoostRegressor(**cat_best_params, iterations=max_iterations, random_state=42, verbose=False, thread_count=1)
+            cat_final.fit(
+                X_train_scaled, y_train_original,
+                eval_set=(X_val_scaled, y_val_original),
+                early_stopping_rounds=50,
+                verbose=False
+            )
+            models['CatBoost'] = cat_final
+            print(f"  ✅ CatBoost retrained")
+        else:
+            print(f"\n⚠️  All features kept (all have importance >= {importance_threshold:.6f})")
+            # Still retrain with early stopping even if no features removed
+            print(f"\n{'='*60}")
+            print("RETRAINING MODELS WITH EARLY STOPPING")
+            print(f"{'='*60}\n")
+            
+            # Retrain XGBoost with early stopping
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Retraining XGBoost with early stopping...")
+            xgb_best_params = best_params['XGBoost'].copy()
+            xgb_final = XGBRegressor(**xgb_best_params, random_state=42, n_jobs=1)
+            xgb_final.fit(X_train_scaled, y_train_original)
+            models['XGBoost'] = xgb_final
+            print(f"  ✅ XGBoost retrained")
+            
+            # Retrain LightGBM with early stopping
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Retraining LightGBM with early stopping...")
+            lgb_best_params = best_params['LightGBM'].copy()
+            max_rounds = lgb_best_params.pop('n_estimators', 500)
+            lgb_final = LGBMRegressor(**lgb_best_params, n_estimators=max_rounds, random_state=42, n_jobs=1, verbose=-1)
+            # Use callbacks if available, otherwise train without early stopping
+            if early_stopping is not None and log_evaluation is not None:
+                lgb_final.fit(
+                    X_train_scaled, y_train_original,
+                    eval_set=[(X_val_scaled, y_val_original)],
+                    eval_metric='rmse',
+                    callbacks=[early_stopping(stopping_rounds=50, verbose=False), log_evaluation(period=0)]
+                )
+            else:
+                lgb_final.fit(
+                    X_train_scaled, y_train_original,
+                    eval_set=[(X_val_scaled, y_val_original)],
+                    eval_metric='rmse'
+                )
+            models['LightGBM'] = lgb_final
+            print(f"  ✅ LightGBM retrained")
+            
+            # Retrain CatBoost with early stopping
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Retraining CatBoost with early stopping...")
+            cat_best_params = best_params['CatBoost'].copy()
+            max_iterations = cat_best_params.pop('iterations', 500)
+            cat_final = CatBoostRegressor(**cat_best_params, iterations=max_iterations, random_state=42, verbose=False, thread_count=1)
+            cat_final.fit(
+                X_train_scaled, y_train_original,
+                eval_set=(X_val_scaled, y_val_original),
+                early_stopping_rounds=50,
+                verbose=False
+            )
+            models['CatBoost'] = cat_final
+            print(f"  ✅ CatBoost retrained")
+else:
+    print("⚠️  XGBoost model not found, skipping feature selection")
 
 # Ridge Regression - COMMENTED OUT (only running XGBoost)
 # print(f"\n{'='*60}")
