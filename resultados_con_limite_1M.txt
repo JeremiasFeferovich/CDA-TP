@@ -1,0 +1,63 @@
+1M threshold:
+
+26,949 propiedades
+Best Model: XGBoost
+Test RMSE: $74,335.12
+Test R²: 0.8065
+Test MAE: $45,748.47
+
+900k threshold:
+
+26,757 propiedades
+Best Model: XGBoost
+Test RMSE: $69,398.50
+Test R²: 0.8038
+Test MAE: $44,671.92
+
+With 30k min threshold:
+
+26,752 propiedades
+Best Model: XGBoost
+Test RMSE: $70,420.59
+Test R²: 0.7963
+Test MAE: $45,268.50
+
+30k<x<800k:
+
+26,513 propiedades
+Best Model: XGBoost
+Test RMSE: $64,565.48
+Test R²: 0.8036
+Test MAE: $42,469.44
+
+30k<x<700k:
+
+26,159 propiedades
+Best Model: XGBoost
+Test RMSE: $58,093.29
+Test R²: 0.7999
+Test MAE: $39,769.30
+
+30k<x<600k:
+
+25,651 propiedades
+Best Model: XGBoost
+Test RMSE: $54,375.15
+Test R²: 0.7912
+Test MAE: $37,740.58
+
+30k<x<500k:
+
+24,889 propiedades
+Best Model: XGBoost
+Test RMSE: $47,682.02
+Test R²: 0.7739
+Test MAE: $34,010.13
+
+30k<x<400k:
+
+23,699 propiedades
+Best Model: XGBoost
+Test RMSE: $43,608.55
+Test R²: 0.7306
+Test MAE: $31,986.02

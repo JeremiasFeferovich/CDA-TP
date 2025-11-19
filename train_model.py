@@ -16,7 +16,8 @@ matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from scipy import stats
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.svm import SVR
@@ -267,6 +268,36 @@ after_max_filter = len(df)
 print(f"  Removed {before_max_filter - after_max_filter:,} properties ({(before_max_filter - after_max_filter)/before_max_filter*100:.1f}%)")
 print(f"  Remaining: {after_max_filter:,} properties")
 print(f"  Final price range: ${df['price'].min():,.0f} - ${df['price'].max():,.0f}")
+
+# **PHASE 1 IMPROVEMENT: Gentle outlier handling using winsorization (capping instead of removal)**
+print(f"\n### Phase 1: Outlier Handling (Winsorization - capping extreme values)...")
+print(f"[{datetime.now().strftime('%H:%M:%S')}] Capping extreme outliers in key features...")
+
+# Use winsorization (capping) instead of removal - less aggressive, preserves data
+outlier_features = ['area', 'bathrooms', 'bedrooms']
+outliers_capped = 0
+
+for feature in outlier_features:
+    if feature in df.columns:
+        # Use wider bounds: 1st and 99th percentiles (very conservative)
+        lower_bound = df[feature].quantile(0.01)
+        upper_bound = df[feature].quantile(0.99)
+        
+        before_cap = ((df[feature] < lower_bound) | (df[feature] > upper_bound)).sum()
+        
+        # Cap values instead of removing
+        df[feature] = df[feature].clip(lower=lower_bound, upper=upper_bound)
+        
+        after_cap = ((df[feature] < lower_bound) | (df[feature] > upper_bound)).sum()
+        capped = before_cap
+        outliers_capped += capped
+        
+        if capped > 0:
+            print(f"  {feature}: Capped {capped:,} extreme values to bounds ({lower_bound:.2f} - {upper_bound:.2f})")
+
+print(f"  Total extreme values capped: {outliers_capped:,}")
+print(f"  Final dataset size: {len(df):,} properties (no properties removed)")
+print(f"  Note: Using RobustScaler will further handle outliers during scaling")
 
 # Drop currency column after filtering
 if 'currency' in df.columns:
@@ -575,22 +606,24 @@ print(f"  Using original scale targets for training")
 print("\n### Calculating neighborhood avg price/sqm (using ONLY training data)...")
 calc_start = time.time()
 
-# Create grid for training data (use full training set including validation for neighborhood averages)
+# **PHASE 1 IMPROVEMENT: Fix data leakage - use ONLY training set (not validation) for neighborhood averages**
+# Previously used X_train_full which included validation set - this causes data leakage
 grid_size = 0.01
 train_data = pd.DataFrame({
-    'latitude': X_train_full['latitude'],
-    'longitude': X_train_full['longitude'],
-    'price': y_train_full,
-    'area': X_train_full['area']
+    'latitude': X_train['latitude'],  # Changed: Use ONLY X_train, not X_train_full
+    'longitude': X_train['longitude'],
+    'price': y_train,  # Changed: Use ONLY y_train, not y_train_full
+    'area': X_train['area']
 })
 train_data['price_per_sqm'] = train_data['price'] / train_data['area']
 train_data['grid_lat'] = (train_data['latitude'] / grid_size).round() * grid_size
 train_data['grid_lon'] = (train_data['longitude'] / grid_size).round() * grid_size
 train_data['grid_cell'] = train_data['grid_lat'].astype(str) + '_' + train_data['grid_lon'].astype(str)
 
-# Calculate grid averages from training data only
+# Calculate grid averages from training data only (no validation data)
 grid_avg_from_train = train_data.groupby('grid_cell')['price_per_sqm'].mean().to_dict()
 overall_avg = train_data['price_per_sqm'].mean()
+print(f"  ⚠️  Fixed data leakage: Using ONLY training set ({len(train_data)} samples) for neighborhood averages")
 
 def get_neighborhood_avg_safe(lat, lon):
     """Get neighborhood average from training data, with fallback"""
@@ -671,7 +704,9 @@ numeric_features = [f for f in numeric_features if f in X_train.columns and f !=
 print(f"Scaling {len(numeric_features)} numeric features (including polynomial and cluster distance features)")
 print(f"Note: location_cluster is categorical and will not be scaled")
 
-scaler = StandardScaler()
+# **PHASE 1 IMPROVEMENT: Use RobustScaler instead of StandardScaler for outlier resistance**
+print(f"\n### Phase 1: Using RobustScaler (outlier-resistant scaling)...")
+scaler = RobustScaler()  # Changed from StandardScaler - uses median and IQR instead of mean/std
 X_train_scaled = X_train.copy()
 X_val_scaled = X_val.copy()
 X_test_scaled = X_test.copy()
@@ -679,6 +714,7 @@ X_test_scaled = X_test.copy()
 X_train_scaled[numeric_features] = scaler.fit_transform(X_train[numeric_features])
 X_val_scaled[numeric_features] = scaler.transform(X_val[numeric_features])
 X_test_scaled[numeric_features] = scaler.transform(X_test[numeric_features])
+print(f"  ✅ Applied RobustScaler to {len(numeric_features)} features (more robust to outliers)")
 
 # Prepare targets for training (using original scale, no log transformation)
 y_train_original = y_train.copy()
@@ -715,18 +751,21 @@ print(f"Estimated time: 5-8 minutes")
 print(f"{'='*60}\n")
 
 model_start = time.time()
-# Updated hyperparameter grid with stronger regularization and reduced complexity to prevent overfitting
-# Reduced grid size for faster training
+# **PHASE 1 IMPROVEMENT: More thorough hyperparameter search around current best**
+# Current best: {'subsample': 0.9, 'reg_lambda': 1.5, 'reg_alpha': 1.0, 'n_estimators': 300, 
+#                'min_child_weight': 5, 'max_depth': 6, 'learning_rate': 0.03, 'gamma': 0.1, 
+#                'colsample_bytree': 0.9}
+# Search around these values with finer granularity
 param_grid_xgb = {
-    'n_estimators': [200, 300, 400],  # Reduced from 200-500
-    'max_depth': [4, 5, 6],  # Reduced from 4-7
-    'learning_rate': [0.01, 0.03, 0.05],  # Reduced from 4 to 3 values
-    'subsample': [0.8, 0.9, 1.0],
-    'colsample_bytree': [0.8, 0.9, 1.0],
-    'min_child_weight': [3, 5],  # Reduced from 3-7
-    'reg_alpha': [0.1, 0.5, 1.0],  # Reduced from 4 to 3 values
-    'reg_lambda': [1.5, 2.0, 3.0],  # Reduced from 4 to 3 values
-    'gamma': [0, 0.1],
+    'n_estimators': [250, 300, 350, 400],  # Around 300
+    'max_depth': [5, 6, 7],  # Around 6
+    'learning_rate': [0.02, 0.03, 0.04, 0.05],  # Around 0.03
+    'subsample': [0.85, 0.9, 0.95],  # Around 0.9
+    'colsample_bytree': [0.85, 0.9, 0.95],  # Around 0.9
+    'min_child_weight': [4, 5, 6],  # Around 5
+    'reg_alpha': [0.5, 1.0, 1.5],  # Around 1.0
+    'reg_lambda': [1.0, 1.5, 2.0, 2.5],  # Around 1.5
+    'gamma': [0.05, 0.1, 0.15],  # Around 0.1
 }
 
 xgb = XGBRegressor(random_state=42, n_jobs=1)
@@ -753,16 +792,20 @@ print(f"Estimated time: 4-6 minutes")
 print(f"{'='*60}\n")
 
 model_start = time.time()
+# **PHASE 1 IMPROVEMENT: More thorough search around current best**
+# Current best: {'subsample': 0.9, 'reg_lambda': 0.5, 'reg_alpha': 0.5, 'num_leaves': 31, 
+#                'n_estimators': 300, 'min_child_samples': 50, 'max_depth': 6, 
+#                'learning_rate': 0.05, 'colsample_bytree': 0.9}
 param_grid_lgb = {
-    'n_estimators': [200, 300, 400],  # Reduced from 200-500
-    'max_depth': [4, 5, 6],  # Reduced from 4-7
-    'learning_rate': [0.01, 0.03, 0.05],  # Reduced from 4 to 3 values
-    'subsample': [0.8, 0.9, 1.0],
-    'colsample_bytree': [0.8, 0.9, 1.0],
-    'min_child_samples': [30, 50],  # Reduced from 3 to 2 values
-    'reg_alpha': [0.1, 0.5, 1.0],  # Kept same
-    'reg_lambda': [0.5, 1.0, 2.0],  # Kept same
-    'num_leaves': [31, 50],  # Reduced from 3 to 2 values
+    'n_estimators': [250, 300, 350, 400],  # Around 300
+    'max_depth': [5, 6, 7],  # Around 6
+    'learning_rate': [0.04, 0.05, 0.06],  # Around 0.05
+    'subsample': [0.85, 0.9, 0.95],  # Around 0.9
+    'colsample_bytree': [0.85, 0.9, 0.95],  # Around 0.9
+    'min_child_samples': [40, 50, 60],  # Around 50
+    'reg_alpha': [0.3, 0.5, 0.7],  # Around 0.5
+    'reg_lambda': [0.3, 0.5, 0.7, 1.0],  # Around 0.5
+    'num_leaves': [25, 31, 40],  # Around 31
 }
 
 lgb = LGBMRegressor(random_state=42, n_jobs=1, verbose=-1)
@@ -788,13 +831,16 @@ print(f"Estimated time: 6-10 minutes")
 print(f"{'='*60}\n")
 
 model_start = time.time()
+# **PHASE 1 IMPROVEMENT: More thorough search around current best**
+# Current best: {'random_strength': 0.5, 'learning_rate': 0.05, 'l2_leaf_reg': 3, 
+#                'iterations': 400, 'depth': 6, 'bagging_temperature': 1}
 param_grid_cat = {
-    'iterations': [200, 300, 400],  # Reduced from 200-500
-    'depth': [4, 5, 6],  # Reduced from 4-7
-    'learning_rate': [0.01, 0.03, 0.05],  # Reduced from 4 to 3 values
-    'l2_leaf_reg': [3, 5, 7],  # Reduced from 4 to 3 values
-    'random_strength': [0, 0.5, 1],
-    'bagging_temperature': [0, 0.5, 1],
+    'iterations': [350, 400, 450, 500],  # Around 400
+    'depth': [5, 6, 7],  # Around 6
+    'learning_rate': [0.04, 0.05, 0.06],  # Around 0.05
+    'l2_leaf_reg': [2, 3, 4, 5],  # Around 3
+    'random_strength': [0.3, 0.5, 0.7],  # Around 0.5
+    'bagging_temperature': [0.8, 1.0, 1.2],  # Around 1.0
 }
 
 cat = CatBoostRegressor(random_state=42, verbose=False, thread_count=1)
@@ -1075,14 +1121,29 @@ print("\n" + "="*60)
 print("ENSEMBLE: Weighted Average of All Models")
 print("="*60)
 
-# Calculate weights based on inverse RMSE (lower RMSE = higher weight)
-test_rmses = [results[name]['test_rmse'] for name in models.keys()]
-weights = [1.0 / rmse for rmse in test_rmses]
+# **PHASE 1 IMPROVEMENT: Optimize ensemble weights using validation set performance**
+print(f"\n### Phase 1: Optimizing ensemble weights using validation set...")
+
+# Get validation predictions for all models
+val_predictions = {}
+for name, model in models.items():
+    val_predictions[name] = model.predict(X_val_scaled)
+
+# Calculate validation RMSE for each model
+val_rmses = {}
+for name in models.keys():
+    val_rmse = np.sqrt(mean_squared_error(y_val_original, val_predictions[name]))
+    val_rmses[name] = val_rmse
+    print(f"  {name} validation RMSE: ${val_rmse:,.2f}")
+
+# Optimize weights: use inverse validation RMSE (better than test RMSE for generalization)
+val_rmses_list = [val_rmses[name] for name in models.keys()]
+weights = [1.0 / rmse for rmse in val_rmses_list]
 weights = np.array(weights) / np.sum(weights)  # Normalize to sum to 1
 
-print(f"\nEnsemble weights:")
+print(f"\nOptimized ensemble weights (based on validation performance):")
 for name, weight in zip(models.keys(), weights):
-    print(f"  {name}: {weight:.3f}")
+    print(f"  {name}: {weight:.3f} (val RMSE: ${val_rmses[name]:,.2f})")
 
 # Generate ensemble predictions
 y_train_pred_ensemble = np.zeros(len(y_train_original))

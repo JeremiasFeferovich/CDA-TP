@@ -1,0 +1,140 @@
+================================================================================
+PROPERTY PRICE PREDICTION MODEL - TRAINING REPORT
+================================================================================
+
+Date: 2025-11-17 21:56:46
+Project: Batata Real State
+Team: Ian Bernasconi, Jeremias Feferovich
+
+--------------------------------------------------------------------------------
+DATASET INFORMATION
+--------------------------------------------------------------------------------
+Total samples: 16120
+Training samples: 10961
+Test samples: 3224
+Number of features: 54
+
+Features used:
+  1. area
+  2. balcony_count
+  3. bathrooms
+  4. bedrooms
+  5. has_balcony
+  6. has_doorman
+  7. has_garage
+  8. has_grill
+  9. has_gym
+  10. has_pool
+  11. has_security
+  12. has_storage
+  13. has_sum
+  14. has_terrace
+  15. latitude
+  16. longitude
+  17. is_destacado
+  18. is_nuevo
+  19. is_departamento
+  20. is_casa
+  21. distance_to_nearest_subway
+  22. subway_stations_nearby
+  23. bus_stops_nearby
+  24. total_amenities
+  25. area_bathrooms
+  26. area_bedrooms
+  27. bathrooms_bedrooms
+  28. area_subway_dist
+  29. subway_bus_stops
+  30. area_neighborhood_price
+  31. area_amenities
+  32. distance_to_city_center
+  33. property_quality_score
+  34. size_score
+  35. area_squared
+  36. bathrooms_squared
+  37. bedrooms_squared
+  38. area_per_bathroom
+  39. area_per_bedroom
+  40. bathrooms_per_bedroom
+  41. area_squared_bathrooms
+  42. area_squared_bedrooms
+  43. distance_city_center_area
+  44. quality_score_area
+  45. location_cluster
+  46. distance_to_cluster_0
+  47. distance_to_cluster_1
+  48. distance_to_cluster_2
+  49. distance_to_cluster_3
+  50. distance_to_cluster_4
+  51. distance_to_cluster_5
+  52. distance_to_cluster_6
+  53. distance_to_cluster_7
+  54. neighborhood_avg_price_per_sqm
+
+--------------------------------------------------------------------------------
+MODELS TRAINED
+--------------------------------------------------------------------------------
+
+XGBoost:
+  Best parameters: {'subsample': 0.85, 'reg_lambda': 1.0, 'reg_alpha': 1.5, 'n_estimators': 300, 'min_child_weight': 6, 'max_depth': 7, 'learning_rate': 0.02, 'gamma': 0.1, 'colsample_bytree': 0.85}
+  Train RMSE: $26,557.10
+  Test RMSE:  $35,468.00
+  Train R²:   0.8068
+  Test R²:    0.6525
+  Train MAE:  $19,947.37
+  Test MAE:   $26,116.13
+
+LightGBM:
+  Best parameters: {'subsample': 0.85, 'reg_lambda': 0.5, 'reg_alpha': 0.7, 'num_leaves': 31, 'n_estimators': 300, 'min_child_samples': 50, 'max_depth': 6, 'learning_rate': 0.04, 'colsample_bytree': 0.85}
+  Train RMSE: $29,562.92
+  Test RMSE:  $35,729.49
+  Train R²:   0.7606
+  Test R²:    0.6474
+  Train MAE:  $22,094.77
+  Test MAE:   $26,410.94
+
+CatBoost:
+  Best parameters: {'random_strength': 0.5, 'learning_rate': 0.06, 'l2_leaf_reg': 4, 'iterations': 350, 'depth': 7, 'bagging_temperature': 1.0}
+  Train RMSE: $29,369.18
+  Test RMSE:  $35,504.83
+  Train R²:   0.7638
+  Test R²:    0.6518
+  Train MAE:  $22,156.13
+  Test MAE:   $26,303.92
+
+Ensemble:
+  Ensemble weights: {'XGBoost': np.float64(0.3349213497729429), 'LightGBM': np.float64(0.3320530307655483), 'CatBoost': np.float64(0.3330256194615087)}
+  Train RMSE: $28,341.13
+  Test RMSE:  $35,421.84
+  Train R²:   0.7800
+  Test R²:    0.6534
+  Train MAE:  $21,300.64
+  Test MAE:   $26,176.86
+
+--------------------------------------------------------------------------------
+BEST MODEL
+--------------------------------------------------------------------------------
+Selected model: Ensemble
+Ensemble weights: {'XGBoost': np.float64(0.3349213497729429), 'LightGBM': np.float64(0.3320530307655483), 'CatBoost': np.float64(0.3330256194615087)}
+Test RMSE: $35,421.84
+Test R²:   0.6534
+Test MAE:  $26,176.86
+
+--------------------------------------------------------------------------------
+KPI TARGET ACHIEVEMENT
+--------------------------------------------------------------------------------
+RMSE < $20,000: ❌ NOT MET ($35,421.84)
+R² > 0.8: ❌ NOT MET (0.6534)
+
+--------------------------------------------------------------------------------
+FILES SAVED
+--------------------------------------------------------------------------------
+Model: models/best_property_price_model.joblib
+Scaler: models/scaler.joblib
+Report: models/training_report.txt
+Visualizations:
+  - data/feature_importance.png
+  - data/predicted_vs_actual.png
+  - data/residuals_distribution.png
+  - data/residuals_vs_predicted.png
+  - data/model_comparison.png
+
