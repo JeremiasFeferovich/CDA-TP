@@ -1,0 +1,32 @@
+Budget Segment ($30k - $120k)
+
+Properties:	6,945 (28.1% of dataset)
+Mean Price:	$89,377
+Median Price:	$90,000
+Std Dev:	$18,675
+Test RMSE:	$15,035
+Test MAE:	$12,166
+RMSE as % of Mean:	16.8%
+MAE as % of Mean (≈MAPE):	13.6%
+
+Mid-Range Segment ($120k - $300k)
+
+Properties:	13,821 (56.0% of dataset)
+Mean Price:	$187,851
+Median Price:	$179,394
+Std Dev:	$49,445
+Test RMSE:	$34,033
+Test MAE:	$26,392
+RMSE as % of Mean:	18.1%
+MAE as % of Mean (≈MAPE):	14.0%
+
+Premium Segment ($300k - $600k)
+
+Properties:	3,894 (15.8% of dataset)
+Mean Price	$406,894
+Median Price	$389,026
+Std Dev	$82,202
+Test RMSE	$68,657
+Test MAE	$54,008
+RMSE as % of Mean	16.9%
+MAE as % of Mean (≈MAPE)	13.3%

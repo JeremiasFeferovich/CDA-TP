@@ -1,0 +1,25 @@
+PRICE SEGMENTATION ANALYSIS
+================================================================================
+
+Dataset: 24,688 properties
+Price range: $31,000 - $600,000
+
+RECOMMENDED STRATEGY: 2_segments
+--------------------------------------------------------------------------------
+
+Segment: low
+  Range: $30,000 - $150,000
+  Properties: 10,898 (44.1%)
+  Mean: $105,486
+  Std Dev: $26,591
+  CV: 25.2%
+
+Segment: high
+  Range: $150,000 - $600,000
+  Properties: 13,762 (55.7%)
+  Mean: $265,358
+  Std Dev: $105,232
+  CV: 39.7%
+
+Balance Score: 0.792
+Weighted CV: 33.2%

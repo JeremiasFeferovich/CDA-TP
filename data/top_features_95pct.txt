@@ -1,0 +1,25 @@
+# Features contributing to 95% of model importance
+# Total: 22 features
+
+area_x_bathrooms
+log_area
+area
+has_pool
+latitude
+luxury_x_transport
+luxury_score
+dist_to_belgrano
+area_per_bedroom
+min_dist_to_premium
+family_score
+has_garage
+longitude
+total_amenities
+restaurants_nearby
+dist_to_constitucion
+parks_nearby
+subway_stations_nearby
+dist_to_puerto_madero
+has_balcony
+area_x_bedrooms
+bathrooms

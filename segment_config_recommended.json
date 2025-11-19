@@ -1,0 +1,19 @@
+{
+  "strategy_name": "2_segments",
+  "segments": [
+    {
+      "name": "low",
+      "price_min": 30000,
+      "price_max": 150000,
+      "expected_count": 10898,
+      "expected_pct": 44.1
+    },
+    {
+      "name": "high",
+      "price_min": 150000,
+      "price_max": 600000,
+      "expected_count": 13762,
+      "expected_pct": 55.7
+    }
+  ]
+}

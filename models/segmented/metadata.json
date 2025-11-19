@@ -1,0 +1,188 @@
+{
+  "config": {
+    "description": "Price segmentation configuration for property prediction model",
+    "strategy_name": "3_segments_optimized",
+    "segments": [
+      {
+        "name": "budget",
+        "price_min": 30000,
+        "price_max": 120000,
+        "expected_count": 6945,
+        "expected_pct": 28.1,
+        "description": "Budget properties - first-time buyers, small apartments",
+        "hyperparameters": {
+          "xgb": {
+            "n_estimators": 1000,
+            "max_depth": 5,
+            "learning_rate": 0.03,
+            "subsample": 0.75,
+            "colsample_bytree": 0.75,
+            "reg_alpha": 2.0,
+            "reg_lambda": 3.0,
+            "random_state": 42,
+            "early_stopping_rounds": 50
+          },
+          "lgbm": {
+            "n_estimators": 1000,
+            "max_depth": 5,
+            "learning_rate": 0.03,
+            "subsample": 0.75,
+            "colsample_bytree": 0.75,
+            "reg_alpha": 2.0,
+            "reg_lambda": 3.0,
+            "min_child_samples": 20,
+            "num_leaves": 31,
+            "random_state": 42,
+            "early_stopping_rounds": 50
+          }
+        }
+      },
+      {
+        "name": "mid_range",
+        "price_min": 120000,
+        "price_max": 300000,
+        "expected_count": 13821,
+        "expected_pct": 56.0,
+        "description": "Mid-range properties - majority of market, families, professionals",
+        "hyperparameters": {
+          "xgb": {
+            "n_estimators": 1000,
+            "max_depth": 5,
+            "learning_rate": 0.03,
+            "subsample": 0.75,
+            "colsample_bytree": 0.75,
+            "reg_alpha": 2.0,
+            "reg_lambda": 3.0,
+            "random_state": 42,
+            "early_stopping_rounds": 50
+          },
+          "lgbm": {
+            "n_estimators": 1000,
+            "max_depth": 5,
+            "learning_rate": 0.03,
+            "subsample": 0.75,
+            "colsample_bytree": 0.75,
+            "reg_alpha": 2.0,
+            "reg_lambda": 3.0,
+            "min_child_samples": 20,
+            "num_leaves": 31,
+            "random_state": 42,
+            "early_stopping_rounds": 50
+          }
+        }
+      },
+      {
+        "name": "premium",
+        "price_min": 300000,
+        "price_max": 600000,
+        "expected_count": 3894,
+        "expected_pct": 15.8,
+        "description": "Premium properties - luxury apartments, penthouses, premium neighborhoods",
+        "hyperparameters": {
+          "xgb": {
+            "n_estimators": 1000,
+            "max_depth": 6,
+            "learning_rate": 0.02,
+            "subsample": 0.75,
+            "colsample_bytree": 0.75,
+            "reg_alpha": 3.0,
+            "reg_lambda": 4.0,
+            "random_state": 42,
+            "early_stopping_rounds": 50
+          },
+          "lgbm": {
+            "n_estimators": 1000,
+            "max_depth": 6,
+            "learning_rate": 0.02,
+            "subsample": 0.75,
+            "colsample_bytree": 0.75,
+            "reg_alpha": 3.0,
+            "reg_lambda": 4.0,
+            "min_child_samples": 20,
+            "num_leaves": 31,
+            "random_state": 42,
+            "early_stopping_rounds": 50
+          }
+        }
+      }
+    ],
+    "routing_strategy": "hard",
+    "ensemble_weights": {
+      "budget": {
+        "xgb": 0.5,
+        "lgbm": 0.5
+      },
+      "mid_range": {
+        "xgb": 0.5,
+        "lgbm": 0.5
+      },
+      "premium": {
+        "xgb": 0.5,
+        "lgbm": 0.5
+      }
+    },
+    "notes": [
+      "Using 3_segments_v1 strategy from analysis",
+      "CV scores: budget=20.9%, mid=26.3%, premium=20.2% (vs overall 33.2% for 2 segments)",
+      "Premium segment uses stronger regularization and deeper trees due to higher complexity",
+      "Weights will be optimized during training based on validation performance"
+    ]
+  },
+  "results": {
+    "budget": {
+      "test_rmse": 15035.297615508902,
+      "test_r2": 0.34342251286184244,
+      "test_mae": 12165.797370579987,
+      "train_rmse": 13399.053822137725,
+      "overfitting_pct": 12.211636844594196,
+      "test_size": 1389
+    },
+    "mid_range": {
+      "test_rmse": 34033.406909866004,
+      "test_r2": 0.5376610090672584,
+      "test_mae": 26392.261541333482,
+      "train_rmse": 29555.49519178704,
+      "overfitting_pct": 15.15086006518104,
+      "test_size": 2765
+    },
+    "premium": {
+      "test_rmse": 68657.02929526332,
+      "test_r2": 0.34343915986925444,
+      "test_mae": 54007.580049441574,
+      "train_rmse": 56722.58381198485,
+      "overfitting_pct": 21.04002441573695,
+      "test_size": 779
+    }
+  },
+  "overall": {
+    "rmse": 38174.071922791394,
+    "r2": 0.8887348857007404,
+    "mae": 26747.374937773704,
+    "baseline_rmse": 49518.0,
+    "improvement_pct": 22.90869598370008
+  },
+  "features": [
+    "area",
+    "bathrooms",
+    "bedrooms",
+    "latitude",
+    "longitude",
+    "luxury_score",
+    "family_score",
+    "total_amenities",
+    "log_area",
+    "area_x_bedrooms",
+    "area_x_bathrooms",
+    "area_per_bedroom",
+    "has_balcony",
+    "has_doorman",
+    "has_garage",
+    "has_grill",
+    "has_gym",
+    "has_pool",
+    "has_security",
+    "has_storage",
+    "has_sum",
+    "has_terrace"
+  ]
+}
