@@ -14,15 +14,6 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 import warnings
 warnings.filterwarnings('ignore')
 
-# Try to import Optuna
-try:
-    import optuna
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    OPTUNA_AVAILABLE = True
-except ImportError:
-    OPTUNA_AVAILABLE = False
-    print("⚠️  Optuna not available. Will use fixed hyperparameters.")
-
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -35,10 +26,6 @@ with open(config_path, 'r') as f:
 SEGMENTS = CONFIG['segments']
 OUTPUT_DIR = 'models/segmented_v3'
 Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-
-# Optuna settings
-N_TRIALS = 20  # Trials per model per segment
-OPTUNA_TIMEOUT = 300  # 5 minutes per model
 
 # ============================================================================
 # LOAD ENHANCED DATA
@@ -114,78 +101,6 @@ for seg in SEGMENTS:
     print(f"  {seg['name']:12s}: {count:>6,} ({pct:>5.1f}%)  {price_range}")
 
 # ============================================================================
-# HYPERPARAMETER OPTIMIZATION FUNCTIONS
-# ============================================================================
-
-def optimize_xgb(X_train, y_train, X_val, y_val, n_trials=20):
-    """Optimize XGBoost hyperparameters with Optuna"""
-
-    def objective(trial):
-        params = {
-            'max_depth': trial.suggest_int('max_depth', 4, 8),
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
-            'subsample': trial.suggest_float('subsample', 0.6, 0.9),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 0.9),
-            'reg_alpha': trial.suggest_float('reg_alpha', 0.5, 5.0),
-            'reg_lambda': trial.suggest_float('reg_lambda', 1.0, 5.0),
-            'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
-            'n_estimators': 1000,
-            'random_state': 42,
-            'n_jobs': -1
-        }
-
-        model = XGBRegressor(**params)
-        model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            verbose=False
-        )
-
-        preds = model.predict(X_val)
-        rmse = np.sqrt(mean_squared_error(y_val, preds))
-        return rmse
-
-    study = optuna.create_study(direction='minimize')
-    study.optimize(objective, n_trials=n_trials, timeout=OPTUNA_TIMEOUT, show_progress_bar=False)
-
-    return study.best_params
-
-def optimize_lgbm(X_train, y_train, X_val, y_val, n_trials=20):
-    """Optimize LightGBM hyperparameters with Optuna"""
-
-    def objective(trial):
-        params = {
-            'max_depth': trial.suggest_int('max_depth', 4, 8),
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
-            'subsample': trial.suggest_float('subsample', 0.6, 0.9),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 0.9),
-            'reg_alpha': trial.suggest_float('reg_alpha', 0.5, 5.0),
-            'reg_lambda': trial.suggest_float('reg_lambda', 1.0, 5.0),
-            'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
-            'num_leaves': trial.suggest_int('num_leaves', 20, 50),
-            'n_estimators': 1000,
-            'random_state': 42,
-            'n_jobs': -1,
-            'verbose': -1
-        }
-
-        model = LGBMRegressor(**params)
-        model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[lgbm.early_stopping(50, verbose=False), lgbm.log_evaluation(0)]
-        )
-
-        preds = model.predict(X_val)
-        rmse = np.sqrt(mean_squared_error(y_val, preds))
-        return rmse
-
-    study = optuna.create_study(direction='minimize')
-    study.optimize(objective, n_trials=n_trials, timeout=OPTUNA_TIMEOUT, show_progress_bar=False)
-
-    return study.best_params
-
-# ============================================================================
 # TRAIN SEGMENT MODELS
 # ============================================================================
 
@@ -210,44 +125,30 @@ for seg in SEGMENTS:
         X_seg, y_seg, test_size=0.2, random_state=42
     )
 
-    # Further split train into train/val for optimization
-    X_train_opt, X_val, y_train_opt, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42
-    )
-
-    print(f"Train: {len(X_train_opt):,}, Val: {len(X_val):,}, Test: {len(X_test):,}")
+    print(f"Train: {len(X_train):,}, Test: {len(X_test):,}")
 
     # Scale features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
-    X_train_opt_scaled = scaler.transform(X_train_opt)
-    X_val_scaled = scaler.transform(X_val)
     X_test_scaled = scaler.transform(X_test)
 
     # ========================================================================
-    # OPTIMIZE & TRAIN XGBOOST
+    # TRAIN XGBOOST
     # ========================================================================
 
     print(f"\n### Training XGBoost...")
-
-    if OPTUNA_AVAILABLE:
-        print("  Optimizing hyperparameters with Optuna...")
-        xgb_params = optimize_xgb(X_train_opt_scaled, y_train_opt, X_val_scaled, y_val, n_trials=N_TRIALS)
-        print(f"  Best params found: max_depth={xgb_params['max_depth']}, lr={xgb_params['learning_rate']:.4f}")
-    else:
-        # Default params
-        xgb_params = {
-            'max_depth': 5,
-            'learning_rate': 0.03,
-            'subsample': 0.75,
-            'colsample_bytree': 0.75,
-            'reg_alpha': 2.0,
-            'reg_lambda': 3.0,
-            'min_child_weight': 3,
-            'n_estimators': 1000,
-            'random_state': 42,
-            'n_jobs': -1
-        }
+    xgb_params = {
+        'max_depth': 5,
+        'learning_rate': 0.03,
+        'subsample': 0.75,
+        'colsample_bytree': 0.75,
+        'reg_alpha': 2.0,
+        'reg_lambda': 3.0,
+        'min_child_weight': 3,
+        'n_estimators': 1000,
+        'random_state': 42,
+        'n_jobs': -1
+    }
 
     # Train on full training set
     xgb_model = XGBRegressor(**xgb_params)
@@ -266,30 +167,26 @@ for seg in SEGMENTS:
     print(f"  XGBoost RMSE: ${xgb_rmse:,.0f}, R²: {xgb_r2:.4f}")
 
     # ========================================================================
-    # OPTIMIZE & TRAIN LIGHTGBM
+    # TRAIN LIGHTGBM
     # ========================================================================
 
     print(f"\n### Training LightGBM...")
 
-    if OPTUNA_AVAILABLE:
-        print("  Optimizing hyperparameters with Optuna...")
-        lgbm_params = optimize_lgbm(X_train_opt_scaled, y_train_opt, X_val_scaled, y_val, n_trials=N_TRIALS)
-        print(f"  Best params found: max_depth={lgbm_params['max_depth']}, lr={lgbm_params['learning_rate']:.4f}")
-    else:
-        lgbm_params = {
-            'max_depth': 5,
-            'learning_rate': 0.03,
-            'subsample': 0.75,
-            'colsample_bytree': 0.75,
-            'reg_alpha': 2.0,
-            'reg_lambda': 3.0,
-            'min_child_weight': 3,
-            'num_leaves': 31,
-            'n_estimators': 1000,
-            'random_state': 42,
-            'n_jobs': -1,
-            'verbose': -1
-        }
+    # Fixed hyperparameters
+    lgbm_params = {
+        'max_depth': 5,
+        'learning_rate': 0.03,
+        'subsample': 0.75,
+        'colsample_bytree': 0.75,
+        'reg_alpha': 2.0,
+        'reg_lambda': 3.0,
+        'min_child_weight': 3,
+        'num_leaves': 31,
+        'n_estimators': 1000,
+        'random_state': 42,
+        'n_jobs': -1,
+        'verbose': -1
+    }
 
     lgbm_model = LGBMRegressor(**lgbm_params)
     lgbm_model.fit(
@@ -453,8 +350,7 @@ metadata = {
     'overall_r2': float(overall_r2),
     'overall_mae': float(overall_mae),
     'num_features': len(feature_cols),
-    'features': feature_cols,
-    'optuna_trials': N_TRIALS if OPTUNA_AVAILABLE else 0
+    'features': feature_cols
 }
 
 metadata_path = f"{OUTPUT_DIR}/metadata.json"
