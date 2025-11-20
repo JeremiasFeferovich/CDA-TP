@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""
-Segmented Property Price Prediction Model v3 - With External Features
-
-Enhancements over v2:
-1. Uses enhanced dataset with 42 additional external features
-2. Landmark distances (15 features)
-3. Neighborhood tier classification (4 features)
-4. Accessibility scores (4 features)
-5. Urban quality indicators (4 features)
-6. Neighborhood aggregates with leave-one-out (8 features)
-7. Property density metrics (1 feature)
-8. Interaction features (4 features)
-9. Per-segment hyperparameter optimization with Optuna
-
-Expected: RMSE ~$28-32k (15-25% improvement over v2's $38,024)
-"""
-
 import pandas as pd
 import numpy as np
 import json
@@ -39,15 +22,6 @@ try:
 except ImportError:
     OPTUNA_AVAILABLE = False
     print("⚠️  Optuna not available. Will use fixed hyperparameters.")
-
-print("=" * 80)
-print("SEGMENTED MODEL v3 - WITH EXTERNAL FEATURES")
-print("=" * 80)
-print("Enhancements:")
-print("  1. 42 new external features (landmarks, neighborhoods, accessibility)")
-print("  2. Per-segment hyperparameter optimization")
-print("  3. Expected 15-25% RMSE improvement")
-print("=" * 80)
 
 # ============================================================================
 # CONFIGURATION
@@ -488,39 +462,6 @@ with open(metadata_path, 'w') as f:
     json.dump(metadata, f, indent=2)
 
 print(f"\n✅ Saved metadata to {metadata_path}")
-
-# ============================================================================
-# COMPARISON TO BASELINE
-# ============================================================================
-
-baseline_rmse = 49518
-v1_rmse = 38174
-v2_rmse = 38024
-
-improvement_vs_baseline = ((baseline_rmse - weighted_rmse) / baseline_rmse) * 100
-improvement_vs_v1 = ((v1_rmse - weighted_rmse) / v1_rmse) * 100
-improvement_vs_v2 = ((v2_rmse - weighted_rmse) / v2_rmse) * 100
-
-print(f"\n{'=' * 80}")
-print("COMPARISON TO PREVIOUS VERSIONS")
-print(f"{'=' * 80}")
-print(f"\nBaseline (single model):     ${baseline_rmse:,}")
-print(f"Segmented v1:                ${v1_rmse:,}")
-print(f"Segmented v2 (full features):${v2_rmse:,}")
-print(f"Segmented v3 (external data):${weighted_rmse:,.0f}")
-print(f"\n📈 Improvements:")
-print(f"  vs Baseline: {improvement_vs_baseline:+.1f}%")
-print(f"  vs v1: {improvement_vs_v1:+.1f}%")
-print(f"  vs v2: {improvement_vs_v2:+.1f}%")
-
-target_rmse = 20000
-remaining_gap = weighted_rmse - target_rmse
-gap_pct = (remaining_gap / target_rmse) * 100
-
-print(f"\n🎯 Progress to $20k target:")
-print(f"  Current: ${weighted_rmse:,.0f}")
-print(f"  Target: ${target_rmse:,}")
-print(f"  Remaining gap: ${remaining_gap:,.0f} ({gap_pct:.0f}% over target)")
 
 print(f"\n{'=' * 80}")
 print("TRAINING COMPLETE!")
