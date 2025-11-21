@@ -187,6 +187,5 @@
     "premium_x_area",
     "premium_x_accessibility",
     "centrality_x_tier_premium"
-  ],
-  "optuna_trials": 0
+  ]
 }
