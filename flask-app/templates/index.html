@@ -36,7 +36,10 @@
     <label for="segment">Segmento de Precio:</label>
     <select name="segment" required>
       {% for seg in segments %}
-        <option value="{{ seg }}" {% if valores.get('segment') == seg %}selected{% endif %}>{{ segment_names.get(seg, seg.replace('_', ' ').title()) }}</option>
+        {% set info = segment_info.get(seg, {}) %}
+        <option value="{{ seg }}" {% if valores.get('segment') == seg %}selected{% endif %}>
+          {{ info.get('display', info.get('name_es', seg.replace('_', ' ').title())) }}
+        </option>
       {% endfor %}
     </select>
     

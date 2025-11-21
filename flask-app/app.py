@@ -43,6 +43,22 @@ SEGMENT_NAMES = {
     'premium': 'Premium'
 }
 
+# Información de segmentos con rangos de precio
+SEGMENT_INFO = {}
+for seg in metadata['segments']:
+    seg_name = seg['name']
+    price_min = seg['price_min']
+    price_max = seg['price_max']
+    name_es = SEGMENT_NAMES.get(seg_name, seg_name)
+    price_range = f"${price_min:,.0f} - ${price_max:,.0f}"
+    SEGMENT_INFO[seg_name] = {
+        'name_es': name_es,
+        'price_min': price_min,
+        'price_max': price_max,
+        'price_range': price_range,
+        'display': f"{name_es} ({price_range})"
+    }
+
 def predict_price(features_dict, segment):
     if segment not in models:
         raise ValueError(f"Segmento desconocido: {segment}")
@@ -117,7 +133,7 @@ def index():
         "index.html",
         fields=PROPERTY_FIELDS,
         segments=SEGMENTS,
-        segment_names=SEGMENT_NAMES,
+        segment_info=SEGMENT_INFO,
         property_types=PROPERTY_TYPES,
         resultado=resultado,
         valores=valores
