@@ -226,6 +226,10 @@ for seg in SEGMENTS:
     final_rmse = np.sqrt(mean_squared_error(y_test_actual, final_pred))
     final_r2 = r2_score(y_test_actual, final_pred)
     final_mae = mean_absolute_error(y_test_actual, final_pred)
+    
+    # Calculate mean price and MAE as percentage
+    test_mean = y_test_actual.mean()
+    mae_pct = (final_mae / test_mean) * 100
 
     # Train metrics
     train_pred_log = best_weight * xgb_model.predict(X_train_scaled) + (1 - best_weight) * lgbm_model.predict(X_train_scaled)
@@ -239,6 +243,8 @@ for seg in SEGMENTS:
     print(f"  Test RMSE: ${final_rmse:,.0f}")
     print(f"  Test R²: {final_r2:.4f}")
     print(f"  Test MAE: ${final_mae:,.0f}")
+    print(f"  Test Mean Price: ${test_mean:,.0f}")
+    print(f"  MAE as % of Mean: {mae_pct:.2f}%")
     print(f"  Train RMSE: ${train_rmse:,.0f}")
     print(f"  Overfitting: {overfitting:.1f}%")
 
@@ -266,6 +272,8 @@ for seg in SEGMENTS:
         'test_rmse': float(final_rmse),
         'test_r2': float(final_r2),
         'test_mae': float(final_mae),
+        'test_mean': float(test_mean),
+        'mae_pct': float(mae_pct),
         'train_rmse': float(train_rmse),
         'overfitting_pct': float(overfitting),
         'test_size': len(X_test),
@@ -317,11 +325,15 @@ for seg in SEGMENTS:
 
 overall_r2 = r2_score(all_actuals, all_preds)
 overall_mae = mean_absolute_error(all_actuals, all_preds)
+overall_mean = np.mean(all_actuals)
+overall_mae_pct = (overall_mae / overall_mean) * 100
 
 print(f"\n📈 OVERALL METRICS:")
 print(f"  Weighted RMSE: ${weighted_rmse:,.0f}")
 print(f"  Overall R²: {overall_r2:.4f}")
 print(f"  Overall MAE: ${overall_mae:,.0f}")
+print(f"  Overall Mean Price: ${overall_mean:,.0f}")
+print(f"  Overall MAE as % of Mean: {overall_mae_pct:.2f}%")
 
 print(f"\n📊 PER-SEGMENT BREAKDOWN:")
 for seg in SEGMENTS:
@@ -331,6 +343,8 @@ for seg in SEGMENTS:
     print(f"    RMSE: ${r['test_rmse']:,.0f}")
     print(f"    R²: {r['test_r2']:.4f}")
     print(f"    MAE: ${r['test_mae']:,.0f}")
+    print(f"    Mean Price: ${r['test_mean']:,.0f}")
+    print(f"    MAE as % of Mean: {r['mae_pct']:.2f}%")
     print(f"    Ensemble: XGBoost={r['xgb_weight']:.2f}, LightGBM={r['lgbm_weight']:.2f}")
 
 # ============================================================================
@@ -345,6 +359,8 @@ metadata = {
     'overall_rmse': float(weighted_rmse),
     'overall_r2': float(overall_r2),
     'overall_mae': float(overall_mae),
+    'overall_mean': float(overall_mean),
+    'overall_mae_pct': float(overall_mae_pct),
     'num_features': len(feature_cols),
     'features': feature_cols
 }
