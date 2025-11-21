@@ -2,22 +2,50 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Predicción de Especie de Iris</title>
+  <title>Predicción de Precio de Propiedad</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <h1>Predicción de Iris</h1>
+  <h1>Predicción de Precio de Propiedad</h1>
   <form method="post">
-    {% for col in columnas %}
-      <label for="{{ col }}">{{ col }}:</label>
-      <input type="number" name="{{ col }}" step="any" value="{{ valores.get(col, '') }}" required>
-    {% endfor %}
-    <input type="submit" value="Predecir especie">
+    <label for="area">Area (m²):</label>
+    <input type="number" name="area" step="any" value="{{ valores.get('area', '') }}" required>
+    
+    <label for="bedrooms">Bedrooms:</label>
+    <input type="number" name="bedrooms" value="{{ valores.get('bedrooms', '') }}" required>
+    
+    <label for="bathrooms">Bathrooms:</label>
+    <input type="number" name="bathrooms" step="any" value="{{ valores.get('bathrooms', '') }}" required>
+    
+    <label for="latitude">Latitude:</label>
+    <input type="number" name="latitude" step="any" value="{{ valores.get('latitude', '') }}" required>
+    
+    <label for="longitude">Longitude:</label>
+    <input type="number" name="longitude" step="any" value="{{ valores.get('longitude', '') }}" required>
+    
+    <label for="property_type">Property Type:</label>
+    <select name="property_type" required>
+      {% for pt in property_types %}
+        <option value="{{ pt }}" {% if valores.get('property_type') == pt %}selected{% endif %}>{{ pt.capitalize() }}</option>
+      {% endfor %}
+    </select>
+    
+    <label for="balcony_count">Balcony Count:</label>
+    <input type="number" name="balcony_count" value="{{ valores.get('balcony_count', '0') }}" min="0">
+    
+    <label for="segment">Price Segment:</label>
+    <select name="segment" required>
+      {% for seg in segments %}
+        <option value="{{ seg }}" {% if valores.get('segment') == seg %}selected{% endif %}>{{ seg.replace('_', ' ').title() }}</option>
+      {% endfor %}
+    </select>
+    
+    <input type="submit" value="Predecir Precio">
   </form>
 
   {% if resultado %}
     <div class="resultado">
-      <strong>Resultado:</strong> {{ resultado }}
+      <strong>Precio Estimado:</strong> {{ resultado }}
     </div>
   {% endif %}
 </body>

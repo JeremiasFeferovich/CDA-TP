@@ -2,3 +2,7 @@ flask
 pandas
 scikit-learn
 joblib
+numpy
+xgboost
+lightgbm
+requests
