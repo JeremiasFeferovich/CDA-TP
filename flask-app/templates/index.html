@@ -19,7 +19,7 @@
     <label for="bathrooms">Baños:</label>
     <input type="number" name="bathrooms" step="any" value="{{ valores.get('bathrooms', '') }}" required>
     
-    <label for="location">Ubicación (haz clic en el mapa para seleccionar):</label>
+    <label for="location">Ubicación:</label>
     <div id="map"></div>
     <input type="hidden" name="latitude" id="latitude" value="{{ valores.get('latitude', '') }}" required>
     <input type="hidden" name="longitude" id="longitude" value="{{ valores.get('longitude', '') }}" required>
