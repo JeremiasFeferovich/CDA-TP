@@ -8,35 +8,35 @@
 <body>
   <h1>Predicción de Precio de Propiedad</h1>
   <form method="post">
-    <label for="area">Area (m²):</label>
+    <label for="area">Área (m²):</label>
     <input type="number" name="area" step="any" value="{{ valores.get('area', '') }}" required>
     
-    <label for="bedrooms">Bedrooms:</label>
+    <label for="bedrooms">Dormitorios:</label>
     <input type="number" name="bedrooms" value="{{ valores.get('bedrooms', '') }}" required>
     
-    <label for="bathrooms">Bathrooms:</label>
+    <label for="bathrooms">Baños:</label>
     <input type="number" name="bathrooms" step="any" value="{{ valores.get('bathrooms', '') }}" required>
     
-    <label for="latitude">Latitude:</label>
+    <label for="latitude">Latitud:</label>
     <input type="number" name="latitude" step="any" value="{{ valores.get('latitude', '') }}" required>
     
-    <label for="longitude">Longitude:</label>
+    <label for="longitude">Longitud:</label>
     <input type="number" name="longitude" step="any" value="{{ valores.get('longitude', '') }}" required>
     
-    <label for="property_type">Property Type:</label>
+    <label for="property_type">Tipo de Propiedad:</label>
     <select name="property_type" required>
       {% for pt in property_types %}
         <option value="{{ pt }}" {% if valores.get('property_type') == pt %}selected{% endif %}>{{ pt.capitalize() }}</option>
       {% endfor %}
     </select>
     
-    <label for="balcony_count">Balcony Count:</label>
+    <label for="balcony_count">Cantidad de Balcones:</label>
     <input type="number" name="balcony_count" value="{{ valores.get('balcony_count', '0') }}" min="0">
     
-    <label for="segment">Price Segment:</label>
+    <label for="segment">Segmento de Precio:</label>
     <select name="segment" required>
       {% for seg in segments %}
-        <option value="{{ seg }}" {% if valores.get('segment') == seg %}selected{% endif %}>{{ seg.replace('_', ' ').title() }}</option>
+        <option value="{{ seg }}" {% if valores.get('segment') == seg %}selected{% endif %}>{{ segment_names.get(seg, seg.replace('_', ' ').title()) }}</option>
       {% endfor %}
     </select>
     

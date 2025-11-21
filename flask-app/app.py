@@ -37,9 +37,15 @@ PROPERTY_FIELDS = [
 SEGMENTS = [seg['name'] for seg in metadata['segments']]
 PROPERTY_TYPES = ['departamento', 'casa']
 
+SEGMENT_NAMES = {
+    'budget': 'Económico',
+    'mid_range': 'Medio',
+    'premium': 'Premium'
+}
+
 def predict_price(features_dict, segment):
     if segment not in models:
-        raise ValueError(f"Unknown segment: {segment}")
+        raise ValueError(f"Segmento desconocido: {segment}")
     
     model_data = models[segment]
     
@@ -111,6 +117,7 @@ def index():
         "index.html",
         fields=PROPERTY_FIELDS,
         segments=SEGMENTS,
+        segment_names=SEGMENT_NAMES,
         property_types=PROPERTY_TYPES,
         resultado=resultado,
         valores=valores
@@ -124,9 +131,16 @@ def predict_api():
         data = request.get_json()
         
         required_fields = ['area', 'bedrooms', 'bathrooms', 'latitude', 'longitude']
+        field_names_es = {
+            'area': 'área',
+            'bedrooms': 'dormitorios',
+            'bathrooms': 'baños',
+            'latitude': 'latitud',
+            'longitude': 'longitud'
+        }
         for field in required_fields:
             if field not in data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
+                return jsonify({"error": f"Campo requerido faltante: {field_names_es.get(field, field)}"}), 400
         
         # Get values with defaults
         area = float(data['area'])
@@ -140,7 +154,7 @@ def predict_api():
         
         # Validate segment
         if segment not in models:
-            return jsonify({"error": f"Invalid segment: {segment}. Must be one of: {', '.join(SEGMENTS)}"}), 400
+            return jsonify({"error": f"Segmento inválido: {segment}. Debe ser uno de: {', '.join(SEGMENTS)}"}), 400
         
         # Compute all features
         features = compute_features(
@@ -167,9 +181,9 @@ def predict_api():
         })
         
     except ValueError as e:
-        return jsonify({"error": f"Invalid input: {str(e)}"}), 400
+        return jsonify({"error": f"Entrada inválida: {str(e)}"}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Error del servidor: {str(e)}"}), 500
 
 
 if __name__ == "__main__":
