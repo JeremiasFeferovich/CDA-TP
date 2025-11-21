@@ -24,7 +24,7 @@ with open(config_path, 'r') as f:
     CONFIG = json.load(f)
 
 SEGMENTS = CONFIG['segments']
-OUTPUT_DIR = 'models/segmented_v3'
+OUTPUT_DIR = 'models/segmented'
 Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 print("\n### Loading dataset...")
