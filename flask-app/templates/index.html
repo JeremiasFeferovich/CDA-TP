@@ -2,7 +2,9 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Predicción de Precio de Propiedad</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -17,11 +19,17 @@
     <label for="bathrooms">Baños:</label>
     <input type="number" name="bathrooms" step="any" value="{{ valores.get('bathrooms', '') }}" required>
     
-    <label for="latitude">Latitud:</label>
-    <input type="number" name="latitude" step="any" value="{{ valores.get('latitude', '') }}" required>
-    
-    <label for="longitude">Longitud:</label>
-    <input type="number" name="longitude" step="any" value="{{ valores.get('longitude', '') }}" required>
+    <label for="location">Ubicación (haz clic en el mapa para seleccionar):</label>
+    <div id="map"></div>
+    <input type="hidden" name="latitude" id="latitude" value="{{ valores.get('latitude', '') }}" required>
+    <input type="hidden" name="longitude" id="longitude" value="{{ valores.get('longitude', '') }}" required>
+    <div id="coordinates-display" style="margin-top: 0.5em; font-size: 0.9em; color: #666;">
+      {% if valores.get('latitude') and valores.get('longitude') %}
+        Latitud: {{ valores.get('latitude') }}, Longitud: {{ valores.get('longitude') }}
+      {% else %}
+        Haz clic en el mapa para seleccionar una ubicación
+      {% endif %}
+    </div>
     
     <label for="property_type">Tipo de Propiedad:</label>
     <select name="property_type" required>
@@ -51,5 +59,60 @@
       <strong>Precio Estimado:</strong> {{ resultado }}
     </div>
   {% endif %}
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // Coordenadas de Buenos Aires (centro por defecto)
+    const BUENOS_AIRES_CENTER = [-34.6037, -58.3816];
+    
+    // Inicializar mapa
+    const map = L.map('map').setView(BUENOS_AIRES_CENTER, 12);
+    
+    // Agregar capa de OpenStreetMap
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors',
+      maxZoom: 19
+    }).addTo(map);
+    
+    // Variables para el marcador
+    let marker = null;
+    const latitudeInput = document.getElementById('latitude');
+    const longitudeInput = document.getElementById('longitude');
+    const coordinatesDisplay = document.getElementById('coordinates-display');
+    
+    // Función para actualizar coordenadas
+    function updateCoordinates(lat, lng) {
+      latitudeInput.value = lat.toFixed(6);
+      longitudeInput.value = lng.toFixed(6);
+      coordinatesDisplay.textContent = `Latitud: ${lat.toFixed(6)}, Longitud: ${lng.toFixed(6)}`;
+    }
+    
+    // Manejar clic en el mapa
+    map.on('click', function(e) {
+      const lat = e.latlng.lat;
+      const lng = e.latlng.lng;
+      
+      // Remover marcador anterior si existe
+      if (marker) {
+        map.removeLayer(marker);
+      }
+      
+      // Agregar nuevo marcador
+      marker = L.marker([lat, lng]).addTo(map);
+      
+      // Actualizar campos del formulario
+      updateCoordinates(lat, lng);
+    });
+    
+    // Restaurar ubicación si hay valores existentes
+    const existingLat = parseFloat(latitudeInput.value);
+    const existingLng = parseFloat(longitudeInput.value);
+    
+    if (!isNaN(existingLat) && !isNaN(existingLng)) {
+      map.setView([existingLat, existingLng], 15);
+      marker = L.marker([existingLat, existingLng]).addTo(map);
+      updateCoordinates(existingLat, existingLng);
+    }
+  </script>
 </body>
 </html>
