@@ -27,12 +27,8 @@ SEGMENTS = CONFIG['segments']
 OUTPUT_DIR = 'models/segmented_v3'
 Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
-# ============================================================================
-# LOAD ENHANCED DATA
-# ============================================================================
-
-print("\n### Loading enhanced dataset...")
-df = pd.read_csv('/home/jeremias.feferovich/Desktop/ITBA/CDA/CDA-TP/data/properati_with_external_features.csv')
+print("\n### Loading dataset...")
+df = pd.read_csv('data/properati_with_external_features.csv')
 print(f"Loaded {len(df):,} properties with {len(df.columns)} features")
 
 # Apply same filters as before
