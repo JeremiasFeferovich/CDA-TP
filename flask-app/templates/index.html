@@ -9,7 +9,7 @@
 </head>
 <body>
   <h1>Predicción de Precio de Propiedad</h1>
-  <form method="post">
+  <form id="prediction-form" method="post">
     <label for="area">Área (m²):</label>
     <input type="number" name="area" step="any" value="{{ valores.get('area', '') }}" required>
     
@@ -51,14 +51,10 @@
       {% endfor %}
     </select>
     
-    <input type="submit" value="Predecir Precio">
+    <input type="submit" value="Predecir Precio" id="submit-btn">
   </form>
 
-  {% if resultado %}
-    <div class="resultado">
-      <strong>Precio Estimado:</strong> {{ resultado }}
-    </div>
-  {% endif %}
+  <div id="resultado-container"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -113,6 +109,76 @@
       marker = L.marker([existingLat, existingLng]).addTo(map);
       updateCoordinates(existingLat, existingLng);
     }
+    
+    // Manejar envío del formulario con AJAX
+    const form = document.getElementById('prediction-form');
+    const resultadoContainer = document.getElementById('resultado-container');
+    const submitBtn = document.getElementById('submit-btn');
+    
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault(); // Prevenir recarga de página
+      
+      // Validar que se haya seleccionado una ubicación
+      if (!latitudeInput.value || !longitudeInput.value) {
+        resultadoContainer.innerHTML = '<div class="resultado error">Por favor, selecciona una ubicación en el mapa</div>';
+        return;
+      }
+      
+      // Mostrar estado de carga
+      submitBtn.disabled = true;
+      submitBtn.value = 'Calculando...';
+      resultadoContainer.innerHTML = '<div class="resultado loading">Calculando precio estimado...</div>';
+      
+      // Recopilar datos del formulario
+      const formData = {
+        area: parseFloat(document.querySelector('input[name="area"]').value),
+        bedrooms: parseInt(document.querySelector('input[name="bedrooms"]').value),
+        bathrooms: parseFloat(document.querySelector('input[name="bathrooms"]').value),
+        latitude: parseFloat(latitudeInput.value),
+        longitude: parseFloat(longitudeInput.value),
+        property_type: document.querySelector('select[name="property_type"]').value,
+        balcony_count: parseInt(document.querySelector('input[name="balcony_count"]').value || 0),
+        segment: document.querySelector('select[name="segment"]').value
+      };
+      
+      try {
+        // Enviar petición AJAX
+        const response = await fetch('/predict', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(formData)
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(data.error || 'Error al calcular el precio');
+        }
+        
+        // Mostrar resultado
+        const price = new Intl.NumberFormat('es-AR', {
+          style: 'currency',
+          currency: 'USD',
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0
+        }).format(data.prediction);
+        
+        resultadoContainer.innerHTML = `
+          <div class="resultado">
+            <strong>Precio Estimado:</strong> ${price}
+          </div>
+        `;
+        
+      } catch (error) {
+        resultadoContainer.innerHTML = `<div class="resultado error">Error: ${error.message}</div>`;
+      } finally {
+        // Restaurar botón
+        submitBtn.disabled = false;
+        submitBtn.value = 'Predecir Precio';
+      }
+    });
   </script>
 </body>
 </html>
