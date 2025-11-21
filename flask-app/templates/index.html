@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Predicción de Especie de Iris</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <h1>Predicción de Iris</h1>
+  <form method="post">
+    {% for col in columnas %}
+      <label for="{{ col }}">{{ col }}:</label>
+      <input type="number" name="{{ col }}" step="any" value="{{ valores.get(col, '') }}" required>
+    {% endfor %}
+    <input type="submit" value="Predecir especie">
+  </form>
+
+  {% if resultado %}
+    <div class="resultado">
+      <strong>Resultado:</strong> {{ resultado }}
+    </div>
+  {% endif %}
+</body>
+</html>
