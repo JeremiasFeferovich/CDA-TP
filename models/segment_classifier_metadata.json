@@ -1,0 +1,199 @@
+{
+  "version": "v1",
+  "description": "Segment classification model",
+  "segments": [
+    {
+      "name": "budget",
+      "price_min": 30000,
+      "price_max": 120000,
+      "expected_count": 6945,
+      "expected_pct": 28.1,
+      "description": "Budget properties - first-time buyers, small apartments",
+      "hyperparameters": {
+        "xgb": {
+          "n_estimators": 1000,
+          "max_depth": 5,
+          "learning_rate": 0.03,
+          "subsample": 0.75,
+          "colsample_bytree": 0.75,
+          "reg_alpha": 2.0,
+          "reg_lambda": 3.0,
+          "random_state": 42,
+          "early_stopping_rounds": 50
+        },
+        "lgbm": {
+          "n_estimators": 1000,
+          "max_depth": 5,
+          "learning_rate": 0.03,
+          "subsample": 0.75,
+          "colsample_bytree": 0.75,
+          "reg_alpha": 2.0,
+          "reg_lambda": 3.0,
+          "min_child_samples": 20,
+          "num_leaves": 31,
+          "random_state": 42,
+          "early_stopping_rounds": 50
+        }
+      }
+    },
+    {
+      "name": "mid_range",
+      "price_min": 120000,
+      "price_max": 300000,
+      "expected_count": 13821,
+      "expected_pct": 56.0,
+      "description": "Mid-range properties - majority of market, families, professionals",
+      "hyperparameters": {
+        "xgb": {
+          "n_estimators": 1000,
+          "max_depth": 5,
+          "learning_rate": 0.03,
+          "subsample": 0.75,
+          "colsample_bytree": 0.75,
+          "reg_alpha": 2.0,
+          "reg_lambda": 3.0,
+          "random_state": 42,
+          "early_stopping_rounds": 50
+        },
+        "lgbm": {
+          "n_estimators": 1000,
+          "max_depth": 5,
+          "learning_rate": 0.03,
+          "subsample": 0.75,
+          "colsample_bytree": 0.75,
+          "reg_alpha": 2.0,
+          "reg_lambda": 3.0,
+          "min_child_samples": 20,
+          "num_leaves": 31,
+          "random_state": 42,
+          "early_stopping_rounds": 50
+        }
+      }
+    },
+    {
+      "name": "premium",
+      "price_min": 300000,
+      "price_max": 600000,
+      "expected_count": 3894,
+      "expected_pct": 15.8,
+      "description": "Premium properties - luxury apartments, penthouses, premium neighborhoods",
+      "hyperparameters": {
+        "xgb": {
+          "n_estimators": 1000,
+          "max_depth": 6,
+          "learning_rate": 0.02,
+          "subsample": 0.75,
+          "colsample_bytree": 0.75,
+          "reg_alpha": 3.0,
+          "reg_lambda": 4.0,
+          "random_state": 42,
+          "early_stopping_rounds": 50
+        },
+        "lgbm": {
+          "n_estimators": 1000,
+          "max_depth": 6,
+          "learning_rate": 0.02,
+          "subsample": 0.75,
+          "colsample_bytree": 0.75,
+          "reg_alpha": 3.0,
+          "reg_lambda": 4.0,
+          "min_child_samples": 20,
+          "num_leaves": 31,
+          "random_state": 42,
+          "early_stopping_rounds": 50
+        }
+      }
+    }
+  ],
+  "results": {
+    "test_accuracy": 0.7816929931146213,
+    "test_precision": 0.7883551502654971,
+    "test_recall": 0.7816929931146213,
+    "test_f1": 0.782469233608859,
+    "test_size": 4938,
+    "xgb_weight": 0.15,
+    "lgbm_weight": 0.85,
+    "xgb_accuracy": 0.7794653705953828,
+    "lgbm_accuracy": 0.7800729040097205,
+    "per_class_precision": {
+      "budget": 0.7244701348747592,
+      "mid_range": 0.8396454472199839,
+      "premium": 0.7208008898776418
+    },
+    "per_class_recall": {
+      "budget": 0.8120950323974082,
+      "mid_range": 0.7539797395079595,
+      "premium": 0.8254777070063695
+    },
+    "per_class_f1": {
+      "budget": 0.7657841140529531,
+      "mid_range": 0.79451010293557,
+      "premium": 0.7695961995249406
+    },
+    "confusion_matrix": [
+      [
+        1128,
+        261,
+        0
+      ],
+      [
+        429,
+        2084,
+        251
+      ],
+      [
+        0,
+        137,
+        648
+      ]
+    ]
+  },
+  "num_features": 45,
+  "features": [
+    "area",
+    "balcony_count",
+    "bathrooms",
+    "bedrooms",
+    "latitude",
+    "longitude",
+    "is_departamento",
+    "is_casa",
+    "dist_to_obelisco",
+    "dist_to_plaza_de_mayo",
+    "dist_to_microcentro",
+    "dist_to_calle_florida",
+    "dist_to_av_santa_fe_alto_palermo",
+    "dist_to_av_cabildo_belgrano",
+    "dist_to_retiro_station",
+    "dist_to_constitucion_station",
+    "dist_to_teatro_colon",
+    "dist_to_la_boca_caminito",
+    "dist_to_uba_law",
+    "dist_to_uca",
+    "dist_to_bosques_de_palermo",
+    "dist_to_reserva_ecologica",
+    "dist_to_puerto_madero_north",
+    "min_dist_to_commercial",
+    "min_dist_to_landmark",
+    "city_centrality_score",
+    "commercial_accessibility",
+    "transport_hub_score",
+    "accessibility_score",
+    "min_dist_to_green",
+    "min_dist_to_culture",
+    "is_waterfront_nearby",
+    "tourist_area_proximity",
+    "neighborhood_area_mean",
+    "neighborhood_area_std",
+    "neighborhood_bathrooms_mean",
+    "neighborhood_bedrooms_mean",
+    "neighborhood_area_loo_mean",
+    "neighborhood_bathrooms_loo_mean",
+    "neighborhood_bedrooms_loo_mean",
+    "area_vs_neighborhood",
+    "local_property_density",
+    "premium_x_area",
+    "premium_x_accessibility",
+    "centrality_x_tier_premium"
+  ]
+}

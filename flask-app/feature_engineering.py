@@ -86,22 +86,12 @@ def compute_neighborhood_stats(lat, lon, ref_data, radius_km=2.0):
         return {
             'area_mean': ref_data['area'].median(),
             'area_std': ref_data['area'].std(),
-            'bathrooms_mean': ref_data['bathrooms'].median(),
-            'bedrooms_mean': ref_data['bedrooms'].median(),
-            'area_loo_mean': ref_data['area'].median(),  # Leave-one-out approximation
-            'bathrooms_loo_mean': ref_data['bathrooms'].median(),
-            'bedrooms_loo_mean': ref_data['bedrooms'].median(),
             'density': len(ref_data) / 1000.0,  # Approximate density
         }
     
     return {
         'area_mean': nearby['area'].mean(),
         'area_std': nearby['area'].std() if len(nearby) > 1 else 0,
-        'bathrooms_mean': nearby['bathrooms'].mean(),
-        'bedrooms_mean': nearby['bedrooms'].mean(),
-        'area_loo_mean': nearby['area'].mean(),  # Simplified LOO
-        'bathrooms_loo_mean': nearby['bathrooms'].mean(),
-        'bedrooms_loo_mean': nearby['bedrooms'].mean(),
         'density': len(nearby) / (np.pi * radius_km**2),  # Properties per km²
     }
 
@@ -109,7 +99,7 @@ def compute_neighborhood_stats(lat, lon, ref_data, radius_km=2.0):
 def compute_features(area, bedrooms, bathrooms, latitude, longitude, 
                     property_type='departamento', balcony_count=0):
     """
-    Compute all 45 features from minimal inputs.
+    Compute all 40 features from minimal inputs.
     
     Parameters:
     -----------
@@ -130,7 +120,7 @@ def compute_features(area, bedrooms, bathrooms, latitude, longitude,
     
     Returns:
     --------
-    dict : Dictionary with all 45 features in the order expected by the model
+    dict : Dictionary with all 40 features in the order expected by the model
     """
     # Load reference data
     ref_data = load_reference_data()
@@ -240,11 +230,6 @@ def compute_features(area, bedrooms, bathrooms, latitude, longitude,
     neighborhood_stats = compute_neighborhood_stats(latitude, longitude, ref_data)
     features['neighborhood_area_mean'] = neighborhood_stats['area_mean']
     features['neighborhood_area_std'] = neighborhood_stats['area_std']
-    features['neighborhood_bathrooms_mean'] = neighborhood_stats['bathrooms_mean']
-    features['neighborhood_bedrooms_mean'] = neighborhood_stats['bedrooms_mean']
-    features['neighborhood_area_loo_mean'] = neighborhood_stats['area_loo_mean']
-    features['neighborhood_bathrooms_loo_mean'] = neighborhood_stats['bathrooms_loo_mean']
-    features['neighborhood_bedrooms_loo_mean'] = neighborhood_stats['bedrooms_loo_mean']
     
     # Derived features
     features['area_vs_neighborhood'] = (
